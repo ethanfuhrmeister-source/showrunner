@@ -223,7 +223,7 @@ body.dragging::before{
   <button id="btnRenumber">Renumber</button>
   <button id="btnDup">Duplicate</button>
   <button id="btnDel">Delete</button>
-  <button id="btnRelevel">Re-level</button>
+  <button id="btnRelevel" title="Sets the selected cue back to its automatic level. Shift-click to do every cue in the show.">Re-level</button>
   <button id="btnWave">Waveform</button>
   <span class="spacer"></span>
   <label class="outsel" id="outWrap" hidden>Output
@@ -514,15 +514,18 @@ function autoLevel(cue){
   if (!d) return 0;
   return Math.round(clamp(linToDb(PEAK_TARGET / d.peak), -24, MAX_BOOST_DB) * 10) / 10;
 }
-function applyLevels(cues){
-  for (const cue of (cues || state.cues)){
+/* Always settle duration and trim for every linked cue. Only cues that are brand
+   new, or that were saved without a level at all, get their fader moved. */
+function applyLevels(freshCues){
+  const fresh = new Set((freshCues || []).map(c => c.id));
+  for (const cue of state.cues){
     const d = decoded.get(lc(cue.file));
     if (!d) continue;
     cue.duration = d.buffer.duration;
     if (!(+cue.end > 0) || cue.end > cue.duration + 0.001) cue.end = cue.duration;
     cue.start = clamp(+cue.start || 0, 0, Math.max(0, cue.end - 0.02));
     cue.autoGainDb = autoLevel(cue);
-    if (cues) cue.gainDb = cue.autoGainDb;      /* only auto-set brand new cues */
+    if (fresh.has(cue.id) || cue.needsLevel){ cue.gainDb = cue.autoGainDb; cue.needsLevel = false; }
   }
   markDirty();
 }
@@ -902,6 +905,9 @@ async function openShowFile(file, handle){
     cue.number = c.number != null ? String(c.number) : "";
     cue.name = c.name || "Cue";
     cue.file = c.file || "";
+    /* No gainDb in the file at all means this cue has never been leveled -- so
+       peak-normalize it as soon as its audio links, same as a fresh import. */
+    cue.needsLevel = typeof c.gainDb !== "number";
     cue.gainDb = typeof c.gainDb === "number" ? c.gainDb : 0;
     cue.autoGainDb = typeof c.autoGainDb === "number" ? c.autoGainDb : cue.gainDb;
     cue.fadeIn = +c.fadeIn || 0;
@@ -1278,12 +1284,14 @@ $("#btnDel").onclick = () => {
   state.selectedId = state.cues[Math.min(i, state.cues.length-1)]?.id || null;
   renumber();
 };
-$("#btnRelevel").onclick = () => {
+$("#btnRelevel").onclick = e => {
   const sel = cueById(state.selectedId);
-  const list = sel ? [sel] : state.cues;
-  for (const c of list) if (hasAudio(c)) c.gainDb = autoLevel(c);
+  const list = (e.shiftKey || !sel) ? state.cues : [sel];
+  let n = 0;
+  for (const c of list) if (hasAudio(c)){ c.gainDb = autoLevel(c); n++; }
   markDirty(); render();
-  banner("Peak-normalized " + list.length + (list.length===1?" cue":" cues") + " to -3 dBFS.", "ok");
+  banner("Peak-normalized " + n + (n===1?" cue":" cues") + " to -3 dBFS."
+         + (list.length === 1 ? "  Shift-click to do the whole show." : ""), "ok");
 };
 
 /* transport */

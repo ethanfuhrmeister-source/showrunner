@@ -94,8 +94,8 @@ If a number shows up **amber**, that file is quiet at the source. The fader is
 maxed at +12 dB and the cue will still sit low against the others. Turn the file
 up in an audio editor.
 
-**Re-level** puts the selected cue back to its automatic level. With nothing
-selected it does the whole list.
+**Re-level** puts the selected cue back to its automatic level. Shift-click it to do
+every cue in the show at once.
 
 **In** — seconds to fade up when the cue starts. `0` means it comes in at full level.
 You can drag this on the waveform instead of typing it.
