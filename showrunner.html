@@ -1,0 +1,1060 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ShowRunner — Audio Cue Player</title>
+<style>
+:root{
+  --bg:#0d1014; --bg2:#141a21; --bg3:#1b232c; --line:#2b3542;
+  --txt:#e8eef5; --dim:#93a2b4; --faint:#5d6b7c;
+  --go:#1fb85c; --go2:#178f47;
+  --warn:#e0a020; --danger:#d8483f;
+  --live:#2fa8e0; --miss:#d8483f;
+  --sel:#2b4a68;
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{
+  margin:0; background:var(--bg); color:var(--txt);
+  font:14px/1.35 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  display:flex; flex-direction:column; overflow:hidden;
+  -webkit-font-smoothing:antialiased;
+}
+button{
+  font:inherit; font-weight:600; color:var(--txt); background:var(--bg3);
+  border:1px solid var(--line); border-radius:6px; padding:7px 12px; cursor:pointer;
+}
+button:hover{background:#25303c}
+button:active{transform:translateY(1px)}
+button:disabled{opacity:.4; cursor:default}
+input,select{
+  font:inherit; color:var(--txt); background:#0b0f13;
+  border:1px solid var(--line); border-radius:5px; padding:5px 7px; min-width:0;
+}
+input:focus,select:focus{outline:2px solid var(--live); outline-offset:-1px}
+kbd{
+  font:600 10px/1 ui-monospace,Menlo,monospace; color:#0d1014; background:#8ea3b8;
+  border-radius:3px; padding:2px 4px; margin-left:6px; vertical-align:2px;
+}
+
+/* ---------- header ---------- */
+header{
+  display:flex; align-items:center; gap:16px; flex-wrap:wrap;
+  padding:10px 14px; background:var(--bg2); border-bottom:1px solid var(--line);
+}
+.brand{display:flex; align-items:center; gap:9px; flex:1 1 240px; min-width:200px}
+.logo{color:var(--go); font-size:19px}
+.showname{
+  font-size:17px; font-weight:700; background:transparent; border:1px solid transparent;
+  padding:5px 7px; flex:1 1 auto; width:100%;
+}
+.showname:hover{border-color:var(--line)}
+.dirty{color:var(--warn); font-size:18px; visibility:hidden}
+.dirty.on{visibility:visible}
+
+.hdr-actions{display:flex; gap:8px; flex-wrap:wrap}
+.hdr-actions button{padding:11px 16px; font-size:15px}
+button.go{background:var(--go2); border-color:var(--go); font-size:17px!important; padding:11px 26px!important}
+button.go:hover{background:var(--go)}
+button.warn{background:#6b5010; border-color:var(--warn)}
+button.warn:hover{background:#8a6714}
+button.warn.on{background:var(--warn); color:#0d1014}
+button.danger{background:#6e241f; border-color:var(--danger)}
+button.danger:hover{background:#8f2f28}
+
+.master{display:flex; align-items:center; gap:9px}
+.master label{font-size:11px; letter-spacing:.09em; color:var(--dim); font-weight:700}
+.master input[type=range]{width:130px}
+.db{font:600 12px/1 ui-monospace,Menlo,monospace; color:var(--dim); min-width:60px; text-align:right}
+
+/* ---------- toolbar ---------- */
+.toolbar{
+  display:flex; align-items:center; gap:8px; flex-wrap:wrap;
+  padding:8px 14px; background:var(--bg); border-bottom:1px solid var(--line);
+}
+.toolbar .sep{width:1px; height:22px; background:var(--line); margin:0 4px}
+.toolbar .spacer{flex:1}
+.outsel{display:flex; align-items:center; gap:6px; font-size:12px; color:var(--dim)}
+.outsel select{max-width:210px}
+
+.banner{
+  padding:9px 14px; font-weight:600; font-size:13px;
+  background:#4a2a12; color:#ffd9a8; border-bottom:1px solid #6b3d17;
+}
+.banner.err{background:#4a1a17; color:#ffc9c4; border-bottom-color:#6e241f}
+.banner.ok{background:#123a24; color:#b8f0cf; border-bottom-color:#1a5c37}
+
+/* ---------- cue list ---------- */
+.listwrap{flex:1; overflow:auto; position:relative}
+.grid{min-width:1080px}
+.rowbase{
+  display:grid;
+  grid-template-columns:26px 62px minmax(150px,1.4fr) minmax(120px,1fr) 168px 62px 62px 116px 62px 42px 122px 76px;
+  align-items:center; gap:8px; padding:0 12px;
+}
+.head{
+  position:sticky; top:0; z-index:5; height:34px;
+  background:var(--bg2); border-bottom:1px solid var(--line);
+  font-size:10px; letter-spacing:.09em; text-transform:uppercase; color:var(--faint); font-weight:700;
+}
+.head span{overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.cue{
+  position:relative; min-height:48px; border-bottom:1px solid #1d242d; cursor:default;
+}
+.cue:nth-child(odd){background:#101419}
+.cue.sel{background:var(--sel)}
+.cue.sel::after{
+  content:""; position:absolute; left:0; top:0; bottom:0; width:3px; background:var(--live);
+}
+.cue.live{box-shadow:inset 0 0 0 1px rgba(47,168,224,.5)}
+.cue.missing .fname{color:var(--miss); font-weight:700}
+.cue.drop-above{border-top:2px solid var(--go)}
+.cue.drop-below{border-bottom:2px solid var(--go)}
+.cue > *{position:relative; z-index:1}
+.cue > .prog{
+  position:absolute; left:0; top:0; bottom:0; width:0;
+  background:rgba(47,168,224,.16); pointer-events:none; z-index:0;
+}
+.handle{cursor:grab; color:var(--faint); text-align:center; user-select:none; font-size:15px}
+.handle:active{cursor:grabbing}
+.num{font:700 14px/1 ui-monospace,Menlo,monospace; text-align:center; padding:6px 2px}
+.nm{font-weight:600}
+.fname{font-size:11.5px; color:var(--dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.lvl{display:flex; align-items:center; gap:7px}
+.lvl input[type=range]{flex:1; min-width:70px}
+.lvl .db{min-width:56px; font-size:11px}
+.lvl .db.ceiling{color:var(--warn)}
+.mini{text-align:center; padding:5px 4px; font:600 12px/1 ui-monospace,Menlo,monospace}
+.chk{display:flex; justify-content:center}
+.chk input{width:17px; height:17px; accent-color:var(--live)}
+.time{font:600 12.5px/1.25 ui-monospace,Menlo,monospace; color:var(--dim); text-align:right}
+.time b{display:block; color:var(--live); font-size:13.5px}
+.rowbtns{display:flex; gap:5px; justify-content:flex-end}
+.rowbtns button{padding:5px 8px; font-size:11px}
+.empty{
+  padding:70px 30px; text-align:center; color:var(--faint); font-size:15px; line-height:1.9;
+}
+.empty strong{color:var(--dim); display:block; font-size:19px; margin-bottom:10px}
+
+/* ---------- footer ---------- */
+footer{
+  border-top:1px solid var(--line); background:var(--bg2);
+  padding:8px 14px; display:flex; align-items:center; gap:14px; flex-wrap:wrap;
+  font-size:12px; color:var(--dim); min-height:42px;
+}
+#nowlist{display:flex; gap:8px; flex-wrap:wrap; flex:1 1 300px}
+.chip{
+  display:flex; align-items:center; gap:7px;
+  background:#12303f; border:1px solid #1d5570; border-radius:5px; padding:4px 8px;
+  font:600 11.5px/1 ui-monospace,Menlo,monospace; color:#cfe9f6;
+}
+.chip button{padding:2px 6px; font-size:10px; background:#1d5570; border-color:#2a6d8e}
+.keys{display:flex; gap:12px; flex-wrap:wrap; font-size:11px; color:var(--faint)}
+.keys span{white-space:nowrap}
+
+/* drag-over whole window */
+body.dragging::before{
+  content:"Drop audio files, a folder, or a .show.json file";
+  position:fixed; inset:14px; z-index:99; border:3px dashed var(--go); border-radius:12px;
+  background:rgba(31,184,92,.10); color:#cdf5dd; font-size:22px; font-weight:700;
+  display:flex; align-items:center; justify-content:center; pointer-events:none;
+}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <span class="logo">&#9654;</span>
+    <input id="showName" class="showname" value="Untitled Show" spellcheck="false" aria-label="Show name">
+    <span id="dirty" class="dirty" title="Unsaved changes">&#9679;</span>
+  </div>
+  <div class="hdr-actions">
+    <button id="btnGo" class="go">GO<kbd>space</kbd></button>
+    <button id="btnPause" class="warn">PAUSE<kbd>P</kbd></button>
+    <button id="btnFadeAll">FADE ALL<kbd>F</kbd></button>
+    <button id="btnStopAll" class="danger">STOP ALL<kbd>esc</kbd></button>
+  </div>
+  <div class="master">
+    <label>MASTER</label>
+    <input type="range" id="master" min="-60" max="6" step="0.5" value="0" aria-label="Master level">
+    <span id="masterDb" class="db">0.0 dB</span>
+  </div>
+</header>
+
+<div class="toolbar">
+  <button id="btnAdd">&#65291; Add Audio&hellip;</button>
+  <button id="btnFolder">Relink Folder&hellip;</button>
+  <span class="sep"></span>
+  <button id="btnSave">Save Show</button>
+  <button id="btnOpen">Open Show</button>
+  <span class="sep"></span>
+  <button id="btnRenumber">Renumber</button>
+  <button id="btnDup">Duplicate</button>
+  <button id="btnDel">Delete</button>
+  <button id="btnRelevel">Re-level</button>
+  <span class="spacer"></span>
+  <label class="outsel" id="outWrap" hidden>Output
+    <select id="outDev"></select>
+    <button id="btnNames" title="Browsers hide device names until you grant audio permission once">Names</button>
+  </label>
+</div>
+
+<div id="banner" class="banner" hidden></div>
+
+<div class="listwrap">
+  <div class="grid">
+    <div class="rowbase head">
+      <span></span><span>#</span><span>Cue Name</span><span>File</span><span>Level</span>
+      <span title="Fade in over this many seconds when the cue starts">In</span><span title="Fade out over this many seconds when you stop this cue">Out</span><span title="What happens to the next cue in the list">Follow</span><span>Wait</span><span>Loop</span>
+      <span style="text-align:right">Time</span><span></span>
+    </div>
+    <div id="rows"></div>
+    <div id="empty" class="empty">
+      <strong>Drop your audio files here</strong>
+      MP3, WAV, AIFF, M4A &mdash; drop a whole folder if you like.<br>
+      Every file becomes a cue, in the order it lands.
+    </div>
+  </div>
+</div>
+
+<footer>
+  <div id="nowlist"></div>
+  <div class="keys">
+    <span><kbd>space</kbd> GO</span>
+    <span><kbd>P</kbd> pause</span>
+    <span><kbd>&darr;</kbd><kbd>&uarr;</kbd> next / prev</span>
+    <span><kbd>S</kbd> fade this cue</span>
+    <span><kbd>F</kbd> fade all</span>
+    <span><kbd>esc</kbd> stop all</span>
+    <span><kbd>&#8997;&darr;</kbd> move cue</span>
+    <span><kbd>&#8984;S</kbd> save</span>
+  </div>
+</footer>
+
+<input type="file" id="fileInput" multiple accept="audio/*,.mp3,.wav,.aif,.aiff,.m4a,.aac,.ogg,.flac,.opus" hidden>
+<input type="file" id="dirInput" webkitdirectory directory multiple hidden>
+<input type="file" id="showInput" accept=".json,application/json" hidden>
+
+<script>
+"use strict";
+
+/* ============================================================
+   ShowRunner — a single-file audio cue player for theatre.
+   No install, no database, no network. Everything lives in
+   this file plus a .show.json you save yourself.
+   ============================================================ */
+
+const AUDIO_RX = /\.(mp3|wav|wave|aif|aiff|aifc|m4a|mp4|aac|ogg|oga|opus|flac|caf)$/i;
+const PEAK_TARGET = 0.7079458;   /* -3 dBFS */
+const MAX_BOOST_DB = 12;
+const DEFAULT_FADE_ALL = 3;
+const FADE_FLOOR = 0.01;         /* fades start 40 dB below target */      /* seconds, used by FADE ALL when a cue has no fade out */
+
+/* ---------- state ---------- */
+const state = {
+  showName: "Untitled Show",
+  cues: [],
+  masterDb: 0,
+  selectedId: null,
+  dirty: false
+};
+
+const library  = new Map();   /* lowercase filename -> File            */
+const decoded  = new Map();   /* lowercase filename -> {buffer, peak}  */
+const playing  = new Map();   /* instance id -> instance               */
+const timers   = new Set();   /* queued follow triggers, on the audio clock */
+let   instSeq  = 0;
+let   cueSeq   = 0;
+
+/* ---------- audio graph ---------- */
+let ctx = null, masterGain = null, silentSink = null, paintTimer = null;
+
+function audio(){
+  if (!ctx){
+    ctx = new (window.AudioContext || window.webkitAudioContext)({ latencyHint:"interactive" });
+    masterGain = ctx.createGain();
+    masterGain.gain.value = dbToLin(state.masterDb);
+    masterGain.connect(ctx.destination);
+    /* timer nodes live here: they must be in the graph to be processed, but must not be heard */
+    silentSink = ctx.createGain();
+    silentSink.gain.value = 0;
+    silentSink.connect(ctx.destination);
+    if (!paintTimer) paintTimer = setInterval(paintLoop, 80);
+  }
+  return ctx;
+}
+function wake(){ const c = audio(); if (c.state === "suspended" && !paused) c.resume(); }
+
+/* ---------- small helpers ---------- */
+const dbToLin = db => db <= -60 ? 0.0001 : Math.pow(10, db/20);
+const linToDb = l  => l <= 0.0001 ? -60 : 20*Math.log10(l);
+const clamp   = (v,a,b) => v < a ? a : v > b ? b : v;
+const $  = s => document.querySelector(s);
+const lc = s => String(s||"").toLowerCase();
+const esc = s => String(s==null?"":s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+
+function mmss(sec){
+  if (!isFinite(sec) || sec < 0) sec = 0;
+  const m = Math.floor(sec/60), s = Math.floor(sec%60);
+  return m + ":" + String(s).padStart(2,"0");
+}
+function baseName(name){ return String(name).replace(/\.[^.]+$/,""); }
+function prettyName(name){
+  return baseName(name).replace(/[_]+/g," ").replace(/\s{2,}/g," ").trim() || "Cue";
+}
+function markDirty(on){
+  state.dirty = on !== false;
+  $("#dirty").classList.toggle("on", state.dirty);
+}
+function banner(msg, kind){
+  const b = $("#banner");
+  if (!msg){ b.hidden = true; b.textContent = ""; b.className = "banner"; return; }
+  b.hidden = false;
+  b.className = "banner" + (kind ? " " + kind : "");
+  b.textContent = msg;
+}
+
+/* ---------- cue model ---------- */
+function newCue(file){
+  return {
+    id: "c" + (++cueSeq),
+    number: "",
+    name: file ? prettyName(file.name) : "Cue",
+    file: file ? file.name : "",
+    gainDb: 0,
+    autoGainDb: 0,
+    fadeIn: 0,
+    fadeOut: 2,
+    follow: "hold",          /* hold | continue | follow */
+    followDelay: 0,
+    loop: false,
+    duration: 0
+  };
+}
+const cueIndex = id => state.cues.findIndex(c => c.id === id);
+const cueById  = id => state.cues.find(c => c.id === id);
+const hasAudio = cue => decoded.has(lc(cue.file));
+
+function renumber(){
+  state.cues.forEach((c,i) => c.number = String(i+1));
+  markDirty(); render();
+}
+
+/* ============================================================
+   Loading audio
+   ============================================================ */
+async function ingest(files){
+  const audioFiles = [], showFiles = [];
+  for (const f of files){
+    if (/\.json$/i.test(f.name)) showFiles.push(f);
+    else if (AUDIO_RX.test(f.name) || /^audio\//.test(f.type)) audioFiles.push(f);
+  }
+
+  if (showFiles.length){ await openShowFile(showFiles[0]); return; }
+  if (!audioFiles.length){ banner("Nothing usable in that drop. Audio files or a .show.json, please.", "err"); return; }
+
+  audioFiles.sort((a,b) => a.name.localeCompare(b.name, undefined, {numeric:true, sensitivity:"base"}));
+
+  /* Step 1 — relink cues that are missing their audio. */
+  const consumed = new Set();
+  for (const cue of state.cues){
+    if (hasAudio(cue) || !cue.file) continue;
+    const hit = audioFiles.find(f => lc(f.name) === lc(cue.file) && !consumed.has(f));
+    if (hit){ library.set(lc(hit.name), hit); consumed.add(hit); }
+  }
+
+  /* Step 2 — anything not already referenced by a cue becomes a new cue. */
+  const referenced = new Set(state.cues.map(c => lc(c.file)));
+  const fresh = [];
+  for (const f of audioFiles){
+    if (consumed.has(f)) continue;
+    if (referenced.has(lc(f.name))){ library.set(lc(f.name), f); continue; }
+    library.set(lc(f.name), f);
+    const cue = newCue(f);
+    state.cues.push(cue);
+    fresh.push(cue);
+    referenced.add(lc(f.name));
+  }
+
+  renumber();
+  await decodeAll(fresh);
+  if (!state.selectedId && state.cues.length) state.selectedId = state.cues[0].id;
+  render();
+  reportMissing();
+}
+
+async function decodeAll(freshCues){
+  const needed = [...new Set(state.cues.filter(c => c.file && !decoded.has(lc(c.file))).map(c => lc(c.file)))]
+                 .filter(n => library.has(n));
+  if (!needed.length){ applyLevels(freshCues); return; }
+
+  const c = audio();
+  let done = 0, failed = [];
+  for (const name of needed){
+    banner("Reading audio " + (++done) + " of " + needed.length + " — " + library.get(name).name);
+    try{
+      const buf = await c.decodeAudioData(await library.get(name).arrayBuffer());
+      decoded.set(name, { buffer: buf, peak: peakOf(buf) });
+    }catch(e){
+      failed.push(library.get(name).name);
+      library.delete(name);
+    }
+    render();
+  }
+  applyLevels(freshCues);
+  banner(failed.length ? "Could not decode: " + failed.join(", ") : "", failed.length ? "err" : "");
+  reportMissing();
+}
+
+function peakOf(buffer){
+  let peak = 0;
+  for (let ch = 0; ch < buffer.numberOfChannels; ch++){
+    const d = buffer.getChannelData(ch);
+    for (let i = 0; i < d.length; i++){ const a = d[i] < 0 ? -d[i] : d[i]; if (a > peak) peak = a; }
+  }
+  return peak || 1;
+}
+
+/* Peak-normalize: set the fader so the file's loudest peak lands at -3 dBFS. */
+function autoLevel(cue){
+  const d = decoded.get(lc(cue.file));
+  if (!d) return 0;
+  return Math.round(clamp(linToDb(PEAK_TARGET / d.peak), -24, MAX_BOOST_DB) * 10) / 10;
+}
+function applyLevels(cues){
+  for (const cue of (cues || state.cues)){
+    const d = decoded.get(lc(cue.file));
+    if (!d) continue;
+    cue.duration = d.buffer.duration;
+    cue.autoGainDb = autoLevel(cue);
+    if (cues) cue.gainDb = cue.autoGainDb;      /* only auto-set brand new cues */
+  }
+  markDirty();
+}
+
+function reportMissing(){
+  const miss = state.cues.filter(c => c.file && !hasAudio(c));
+  if (miss.length){
+    banner(miss.length + (miss.length === 1 ? " cue needs" : " cues need") +
+           " audio. Drop the show's audio folder onto this window, or hit Relink Folder.", "err");
+  } else if ($("#banner").classList.contains("err")){
+    banner("");
+  }
+}
+
+/* ============================================================
+   Playback
+   ============================================================ */
+let paused = false;
+
+/* Fire fn at an exact AudioContext time.
+   A one-sample silent buffer is the only clock that stays honest: setTimeout gets
+   throttled when the window is hidden and requestAnimationFrame stops outright,
+   but the audio thread keeps running -- and it freezes with the context on PAUSE,
+   which is exactly what a follow cue should do. */
+function scheduleFollow(when, afterId){
+  const c = audio();
+  const src = c.createBufferSource();
+  src.buffer = c.createBuffer(1, 1, c.sampleRate);
+  src.connect(silentSink);
+  const rec = { node:src, afterId, at:when };
+  src.onended = () => {
+    if (!timers.has(rec)) return;      /* cancelled */
+    timers.delete(rec);
+    const i = cueIndex(afterId);
+    if (i >= 0 && i + 1 < state.cues.length) fire(state.cues[i+1], null, 0);
+  };
+  try{ src.start(Math.max(c.currentTime, when)); }catch(e){ return null; }
+  timers.add(rec);
+  return rec;
+}
+
+function clearFollows(){
+  for (const rec of timers){
+    try{ rec.node.onended = null; rec.node.stop(); }catch(e){}
+  }
+  timers.clear();
+}
+
+function fire(cue, when, depth){
+  depth = depth || 0;
+  const d = decoded.get(lc(cue.file));
+  if (!d){ reportMissing(); return; }
+  const c = audio();
+  const t0 = when != null ? when : c.currentTime + 0.02;
+
+  const src = c.createBufferSource();
+  src.buffer = d.buffer;
+  src.loop = !!cue.loop;
+
+  const g = c.createGain();
+  src.connect(g); g.connect(masterGain);
+
+  const target = dbToLin(cue.gainDb);
+  const fin = Math.max(0, +cue.fadeIn || 0);
+  if (fin > 0){
+    /* Start 40 dB under the target, not at silence. An exponential ramp is straight
+       in decibels, so this is a real fader move: audible movement the whole way up.
+       Ramping from near-zero instead would sit inaudible for most of the fade and
+       then lurch to full level at the end. */
+    g.gain.setValueAtTime(Math.max(target * FADE_FLOOR, 1e-5), t0);
+    g.gain.exponentialRampToValueAtTime(Math.max(target, 2e-5), t0 + fin);
+  } else {
+    g.gain.setValueAtTime(target, t0);
+  }
+
+  /* No automatic tail fade. "Out" is the fade time used when you stop this cue --
+     an auto fade over the last seconds of every file would wreck a door slam. */
+  const dur = d.buffer.duration;
+
+  src.start(t0);
+  const id = "i" + (++instSeq);
+  const inst = { id, cueId: cue.id, src, gain: g, t0, dur, endsAt: t0 + dur, loop: !!cue.loop, stopping:false };
+  playing.set(id, inst);
+  src.onended = () => { if (playing.has(id)) playing.delete(id); paintNow(); };
+
+  /* chain */
+  const delay = Math.max(0, +cue.followDelay || 0);
+  const nextIdx = cueIndex(cue.id) + 1;
+  if (nextIdx > 0 && nextIdx < state.cues.length){
+    if (cue.follow === "continue"){
+      if (delay <= 0.001 && depth < 64) fire(state.cues[nextIdx], t0, depth + 1);
+      else scheduleFollow(t0 + delay, cue.id);
+    } else if (cue.follow === "follow" && !cue.loop){
+      scheduleFollow(t0 + dur + delay, cue.id);
+    }
+  }
+  paintNow(); render();
+}
+
+/* Where the playhead lands after a GO: past the whole auto-chain. */
+function chainEnd(idx){
+  let i = idx, guard = 0;
+  while (guard++ < 500){
+    const c = state.cues[i];
+    if (!c) break;
+    if (c.follow === "hold") break;
+    if (c.follow === "follow" && c.loop) break;
+    if (i + 1 >= state.cues.length) break;
+    i++;
+  }
+  return i;
+}
+
+function go(){
+  wake();
+  const idx = state.selectedId ? cueIndex(state.selectedId) : 0;
+  const cue = state.cues[idx];
+  if (!cue) return;
+  fire(cue);
+  const after = chainEnd(idx) + 1;
+  state.selectedId = state.cues[Math.min(after, state.cues.length - 1)]?.id || cue.id;
+  render(); scrollToSel();
+}
+
+function stopInstance(inst, fadeSec){
+  const c = audio(), now = c.currentTime;
+  fadeSec = Math.max(0, +fadeSec || 0);
+  const at = now + fadeSec;
+  /* Already stopping at least this fast? Leave it alone. Otherwise the new,
+     shorter stop wins -- so STOP ALL always cuts through a fade in progress. */
+  if (inst.stopping && inst.stopAt <= at + 0.001) return;
+  inst.stopping = true;
+  inst.stopAt = at;
+  if (fadeSec > 0){
+    try{
+      const from = Math.max(inst.gain.gain.value, 2e-5);
+      inst.gain.gain.cancelScheduledValues(now);
+      inst.gain.gain.setValueAtTime(from, now);
+      /* 60 dB down from wherever it is now -- inaudible, and it uses the whole fade time */
+      inst.gain.gain.exponentialRampToValueAtTime(Math.max(from / 1000, 1e-6), now + fadeSec);
+    }catch(e){}
+    try{ inst.src.stop(now + fadeSec + 0.02); }catch(e){}
+  } else {
+    try{ inst.gain.gain.cancelScheduledValues(now); inst.gain.gain.setValueAtTime(0.0001, now); }catch(e){}
+    try{ inst.src.stop(now + 0.01); }catch(e){}
+  }
+}
+
+function stopAll(fade){
+  for (const inst of playing.values()){
+    const cue = cueById(inst.cueId);
+    const f = fade ? (cue && +cue.fadeOut > 0 ? +cue.fadeOut : DEFAULT_FADE_ALL) : 0;
+    stopInstance(inst, f);
+  }
+  clearFollows();
+  if (paused) togglePause();
+  paintNow();
+}
+
+function stopCue(cueId, fade){
+  const cue = cueById(cueId);
+  const f = fade ? (cue && +cue.fadeOut > 0 ? +cue.fadeOut : DEFAULT_FADE_ALL) : 0;
+  for (const inst of playing.values()) if (inst.cueId === cueId) stopInstance(inst, f);
+  paintNow();
+}
+
+function togglePause(){
+  const c = audio();
+  if (paused){ paused = false; c.resume(); }
+  else { paused = true; c.suspend(); }
+  $("#btnPause").classList.toggle("on", paused);
+  $("#btnPause").innerHTML = (paused ? "RESUME" : "PAUSE") + "<kbd>P</kbd>";
+}
+
+/* ---------- the paint loop (display only -- the cue engine is on the audio clock) ---------- */
+function paintLoop(){
+  if (!ctx) return;
+  const now = ctx.currentTime;
+  let gone = false;
+  for (const [id, inst] of playing){
+    if (!inst.loop && now >= inst.endsAt + 0.08){ playing.delete(id); gone = true; }
+  }
+  paintTimes(now);
+  if (gone) paintNow();
+}
+
+/* ============================================================
+   Rendering
+   ============================================================ */
+const FOLLOWS = [["hold","Hold"],["continue","Continue"],["follow","Follow end"]];
+
+function render(){
+  const rows = $("#rows");
+  $("#empty").hidden = state.cues.length > 0;
+  rows.innerHTML = state.cues.map(cueRow).join("");
+  $("#showName").value = state.showName;
+  paintNow();
+  if (ctx) paintTimes(ctx.currentTime);
+}
+
+function cueRow(cue){
+  const live = [...playing.values()].some(i => i.cueId === cue.id);
+  const cls = ["rowbase","cue",
+    cue.id === state.selectedId ? "sel" : "",
+    live ? "live" : "",
+    cue.file && !hasAudio(cue) ? "missing" : ""].join(" ");
+  const fileTxt = cue.file ? (hasAudio(cue) ? cue.file : "MISSING — " + cue.file) : "no file";
+  return `
+<div class="${cls}" data-id="${cue.id}" draggable="true">
+  <div class="prog" data-prog="${cue.id}"></div>
+  <div class="handle" title="Drag to reorder">&#8942;&#8942;</div>
+  <input class="num" data-f="number" value="${esc(cue.number)}" aria-label="Cue number">
+  <input class="nm"  data-f="name"   value="${esc(cue.name)}" aria-label="Cue name">
+  <div class="fname" title="${esc(cue.file)}">${esc(fileTxt)}</div>
+  <div class="lvl">
+    <input type="range" data-f="gainDb" min="-60" max="12" step="0.5" value="${cue.gainDb}" aria-label="Level">
+    <span class="db${cue.gainDb >= MAX_BOOST_DB - 0.01 ? " ceiling" : ""}" data-db="${cue.id}"${cue.gainDb >= MAX_BOOST_DB - 0.01 ? ' title="At the +12 dB boost ceiling. This file is quiet at the source \u2014 it will still sit low against the others."' : ""}>${cue.gainDb.toFixed(1)} dB</span>
+  </div>
+  <input class="mini" type="number" data-f="fadeIn"  min="0" max="600" step="0.5" value="${cue.fadeIn}"  aria-label="Fade in seconds" title="Seconds to fade up when this cue starts">
+  <input class="mini" type="number" data-f="fadeOut" min="0" max="600" step="0.5" value="${cue.fadeOut}" aria-label="Fade out seconds when stopped" title="Seconds to fade out when you stop this cue">
+  <select data-f="follow" aria-label="Follow mode">
+    ${FOLLOWS.map(([v,l]) => `<option value="${v}"${cue.follow===v?" selected":""}>${l}</option>`).join("")}
+  </select>
+  <input class="mini" type="number" data-f="followDelay" min="0" max="3600" step="0.5" value="${cue.followDelay}" aria-label="Wait seconds">
+  <div class="chk"><input type="checkbox" data-f="loop"${cue.loop?" checked":""} aria-label="Loop"></div>
+  <div class="time" data-time="${cue.id}">${mmss(cue.duration)}</div>
+  <div class="rowbtns">
+    <button data-act="play" title="Play this cue">&#9654;</button>
+    <button data-act="stop" title="Fade this cue out">&#9632;</button>
+  </div>
+</div>`;
+}
+
+function paintTimes(now){
+  for (const cue of state.cues){
+    const insts = [...playing.values()].filter(i => i.cueId === cue.id);
+    const cell = document.querySelector(`[data-time="${cue.id}"]`);
+    const bar  = document.querySelector(`[data-prog="${cue.id}"]`);
+    if (!cell) continue;
+    if (insts.length){
+      const inst = insts[insts.length - 1];
+      const elapsed = Math.max(0, now - inst.t0);
+      const pos = inst.loop && inst.dur ? elapsed % inst.dur : Math.min(elapsed, inst.dur);
+      const left = Math.max(0, inst.dur - pos);
+      cell.innerHTML = "<b>-" + mmss(left) + "</b>" + mmss(inst.dur) + (insts.length > 1 ? " &times;"+insts.length : "");
+      if (bar) bar.style.width = (inst.dur ? (pos/inst.dur*100) : 0) + "%";
+    } else {
+      cell.textContent = mmss(cue.duration);
+      if (bar) bar.style.width = "0";
+    }
+  }
+}
+
+function paintNow(){
+  const wrap = $("#nowlist");
+  const items = [...playing.values()];
+  if (!items.length){ wrap.innerHTML = '<span style="color:var(--faint)">Nothing playing</span>'; return; }
+  wrap.innerHTML = items.map(i => {
+    const cue = cueById(i.cueId);
+    return `<span class="chip">${esc(cue ? (cue.number+" "+cue.name) : "cue")}
+      <button data-stopinst="${i.id}" title="Fade out">&#9632;</button></span>`;
+  }).join("");
+}
+
+function scrollToSel(){
+  const el = document.querySelector('.cue.sel');
+  if (el) el.scrollIntoView({ block:"nearest" });
+}
+
+/* ============================================================
+   Save / open
+   ============================================================ */
+function serialize(){
+  return JSON.stringify({
+    app: "showrunner", version: 1,
+    name: state.showName,
+    masterDb: state.masterDb,
+    cues: state.cues.map(c => ({
+      number:c.number, name:c.name, file:c.file,
+      gainDb:c.gainDb, autoGainDb:c.autoGainDb,
+      fadeIn:c.fadeIn, fadeOut:c.fadeOut,
+      follow:c.follow, followDelay:c.followDelay,
+      loop:c.loop, duration:c.duration
+    }))
+  }, null, 2);
+}
+
+function saveShow(){
+  const safe = (state.showName || "Untitled Show").replace(/[^\w\s.-]/g,"").trim() || "Untitled Show";
+  const blob = new Blob([serialize()], { type:"application/json" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = safe + ".show.json";
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+  markDirty(false);
+  banner("Saved " + a.download + " to your Downloads folder. Keep it next to your audio.", "ok");
+}
+
+async function openShowFile(file){
+  let data;
+  try{ data = JSON.parse(await file.text()); }
+  catch(e){ banner("That file isn't readable show data.", "err"); return; }
+  if (!data || !Array.isArray(data.cues)){ banner("That JSON isn't a ShowRunner show file.", "err"); return; }
+
+  stopAll(false);
+  state.showName = data.name || baseName(file.name).replace(/\.show$/i,"");
+  state.masterDb = typeof data.masterDb === "number" ? data.masterDb : 0;
+  $("#master").value = state.masterDb;
+  $("#masterDb").textContent = state.masterDb.toFixed(1) + " dB";
+  if (masterGain) masterGain.gain.value = dbToLin(state.masterDb);
+
+  state.cues = data.cues.map(c => {
+    const cue = newCue(null);
+    cue.number = c.number != null ? String(c.number) : "";
+    cue.name = c.name || "Cue";
+    cue.file = c.file || "";
+    cue.gainDb = typeof c.gainDb === "number" ? c.gainDb : 0;
+    cue.autoGainDb = typeof c.autoGainDb === "number" ? c.autoGainDb : cue.gainDb;
+    cue.fadeIn = +c.fadeIn || 0;
+    cue.fadeOut = +c.fadeOut || 0;
+    cue.follow = ["hold","continue","follow"].includes(c.follow) ? c.follow : "hold";
+    cue.followDelay = +c.followDelay || 0;
+    cue.loop = !!c.loop;
+    cue.duration = +c.duration || 0;
+    return cue;
+  });
+  state.selectedId = state.cues[0]?.id || null;
+  markDirty(false);
+  render();
+
+  /* Relink anything we already have in memory, then ask for the rest. */
+  await decodeAll(null);
+  render();
+  reportMissing();
+}
+
+/* ============================================================
+   Wiring
+   ============================================================ */
+
+/* toolbar */
+$("#btnAdd").onclick   = () => $("#fileInput").click();
+$("#btnFolder").onclick= () => $("#dirInput").click();
+$("#btnOpen").onclick  = () => $("#showInput").click();
+$("#btnSave").onclick  = saveShow;
+$("#btnRenumber").onclick = renumber;
+
+$("#fileInput").onchange = e => { ingest([...e.target.files]); e.target.value = ""; };
+$("#dirInput").onchange  = e => { ingest([...e.target.files]); e.target.value = ""; };
+$("#showInput").onchange = e => { if (e.target.files[0]) openShowFile(e.target.files[0]); e.target.value = ""; };
+
+$("#btnDup").onclick = () => {
+  const cue = cueById(state.selectedId); if (!cue) return;
+  const copy = Object.assign({}, cue, { id:"c"+(++cueSeq), name: cue.name + " (copy)" });
+  state.cues.splice(cueIndex(cue.id)+1, 0, copy);
+  state.selectedId = copy.id;
+  renumber();
+};
+$("#btnDel").onclick = () => {
+  const cue = cueById(state.selectedId); if (!cue) return;
+  if (!confirm("Delete cue " + cue.number + " — " + cue.name + "?")) return;
+  const i = cueIndex(cue.id);
+  stopCue(cue.id, false);
+  state.cues.splice(i,1);
+  state.selectedId = state.cues[Math.min(i, state.cues.length-1)]?.id || null;
+  renumber();
+};
+$("#btnRelevel").onclick = () => {
+  const sel = cueById(state.selectedId);
+  const list = sel ? [sel] : state.cues;
+  for (const c of list) if (hasAudio(c)) c.gainDb = autoLevel(c);
+  markDirty(); render();
+  banner("Peak-normalized " + list.length + (list.length===1?" cue":" cues") + " to -3 dBFS.", "ok");
+};
+
+/* transport */
+$("#btnGo").onclick = go;
+$("#btnPause").onclick = () => { audio(); togglePause(); };
+$("#btnFadeAll").onclick = () => stopAll(true);
+$("#btnStopAll").onclick = () => stopAll(false);
+
+$("#showName").oninput = e => { state.showName = e.target.value; markDirty(); };
+
+$("#master").oninput = e => {
+  state.masterDb = +e.target.value;
+  $("#masterDb").textContent = state.masterDb.toFixed(1) + " dB";
+  if (masterGain) masterGain.gain.value = dbToLin(state.masterDb);
+  markDirty();
+};
+
+/* row interaction (delegated) */
+const rowsEl = $("#rows");
+
+rowsEl.addEventListener("mousedown", e => {
+  const row = e.target.closest(".cue"); if (!row) return;
+  state.selectedId = row.dataset.id;
+  document.querySelectorAll(".cue").forEach(r => r.classList.toggle("sel", r === row));
+});
+
+rowsEl.addEventListener("click", e => {
+  const btn = e.target.closest("button[data-act]"); if (!btn) return;
+  const cue = cueById(btn.closest(".cue").dataset.id); if (!cue) return;
+  wake();
+  if (btn.dataset.act === "play") fire(cue);
+  else stopCue(cue.id, true);
+});
+
+$("#nowlist").addEventListener("click", e => {
+  const btn = e.target.closest("button[data-stopinst]"); if (!btn) return;
+  const inst = playing.get(btn.dataset.stopinst);
+  if (inst){
+    const cue = cueById(inst.cueId);
+    stopInstance(inst, cue && +cue.fadeOut > 0 ? +cue.fadeOut : DEFAULT_FADE_ALL);
+  }
+});
+
+rowsEl.addEventListener("input", e => {
+  const f = e.target.dataset.f; if (!f) return;
+  const cue = cueById(e.target.closest(".cue").dataset.id); if (!cue) return;
+  if (f === "loop") cue.loop = e.target.checked;
+  else if (f === "gainDb"){
+    cue.gainDb = +e.target.value;
+    const lbl = document.querySelector(`[data-db="${cue.id}"]`);
+    if (lbl){
+      lbl.textContent = cue.gainDb.toFixed(1) + " dB";
+      lbl.classList.toggle("ceiling", cue.gainDb >= MAX_BOOST_DB - 0.01);
+    }
+    /* live-adjust anything of this cue that is already playing */
+    if (ctx) for (const inst of playing.values()) if (inst.cueId === cue.id && !inst.stopping){
+      try{
+        inst.gain.gain.cancelScheduledValues(ctx.currentTime);
+        inst.gain.gain.setTargetAtTime(dbToLin(cue.gainDb), ctx.currentTime, 0.03);
+      }catch(err){}
+    }
+  }
+  else if (f === "number" || f === "name") cue[f] = e.target.value;
+  else cue[f] = clamp(+e.target.value || 0, 0, 3600);
+  markDirty();
+});
+
+rowsEl.addEventListener("change", e => {
+  const f = e.target.dataset.f;
+  if (f !== "follow") return;
+  const cue = cueById(e.target.closest(".cue").dataset.id);
+  if (cue){ cue.follow = e.target.value; markDirty(); }
+});
+
+/* reorder by dragging rows */
+let dragId = null;
+rowsEl.addEventListener("dragstart", e => {
+  const row = e.target.closest(".cue"); if (!row) return;
+  dragId = row.dataset.id;
+  e.dataTransfer.effectAllowed = "move";
+  try{ e.dataTransfer.setData("text/plain", dragId); }catch(err){}
+});
+rowsEl.addEventListener("dragover", e => {
+  if (!dragId) return;
+  e.preventDefault();
+  const row = e.target.closest(".cue"); if (!row) return;
+  const r = row.getBoundingClientRect();
+  const below = e.clientY > r.top + r.height/2;
+  document.querySelectorAll(".cue").forEach(x => x.classList.remove("drop-above","drop-below"));
+  row.classList.add(below ? "drop-below" : "drop-above");
+});
+rowsEl.addEventListener("drop", e => {
+  if (!dragId) return;
+  e.preventDefault(); e.stopPropagation();
+  const row = e.target.closest(".cue");
+  document.querySelectorAll(".cue").forEach(x => x.classList.remove("drop-above","drop-below"));
+  if (row && row.dataset.id !== dragId){
+    const r = row.getBoundingClientRect();
+    const below = e.clientY > r.top + r.height/2;
+    const from = cueIndex(dragId);
+    const moved = state.cues.splice(from,1)[0];
+    let to = cueIndex(row.dataset.id) + (below ? 1 : 0);
+    state.cues.splice(to, 0, moved);
+    state.selectedId = moved.id;
+    renumber();
+  }
+  dragId = null;
+});
+rowsEl.addEventListener("dragend", () => {
+  dragId = null;
+  document.querySelectorAll(".cue").forEach(x => x.classList.remove("drop-above","drop-below"));
+});
+
+function moveSel(dir){
+  const i = cueIndex(state.selectedId); if (i < 0) return;
+  const j = i + dir;
+  if (j < 0 || j >= state.cues.length) return;
+  const [c] = state.cues.splice(i,1);
+  state.cues.splice(j,0,c);
+  renumber(); scrollToSel();
+}
+function selectStep(dir){
+  const i = cueIndex(state.selectedId);
+  const j = clamp(i < 0 ? 0 : i + dir, 0, state.cues.length - 1);
+  state.selectedId = state.cues[j]?.id || null;
+  render(); scrollToSel();
+}
+
+/* file drop on the window */
+let dragDepth = 0;
+window.addEventListener("dragenter", e => {
+  if (dragId) return;
+  if (![...(e.dataTransfer?.types||[])].includes("Files")) return;
+  dragDepth++; document.body.classList.add("dragging");
+});
+window.addEventListener("dragleave", () => {
+  if (--dragDepth <= 0){ dragDepth = 0; document.body.classList.remove("dragging"); }
+});
+window.addEventListener("dragover", e => { if (!dragId) e.preventDefault(); });
+window.addEventListener("drop", async e => {
+  if (dragId) return;
+  e.preventDefault();
+  dragDepth = 0; document.body.classList.remove("dragging");
+  const dt = e.dataTransfer; if (!dt) return;
+  wake();
+  const files = await collectFiles(dt);
+  if (files.length) ingest(files);
+});
+
+/* walk dropped folders */
+async function collectFiles(dt){
+  const items = dt.items ? [...dt.items] : [];
+  const entries = [];
+  for (const it of items){
+    if (it.kind !== "file") continue;
+    const en = it.webkitGetAsEntry ? it.webkitGetAsEntry() : null;
+    if (en) entries.push(en); else { const f = it.getAsFile(); if (f) entries.push(f); }
+  }
+  if (!entries.length) return dt.files ? [...dt.files] : [];
+  const out = [];
+  const walk = async en => {
+    if (en instanceof File){ out.push(en); return; }
+    if (en.isFile){
+      await new Promise(res => en.file(f => { out.push(f); res(); }, res));
+    } else if (en.isDirectory){
+      const rd = en.createReader();
+      let batch;
+      do{
+        batch = await new Promise(res => rd.readEntries(res, () => res([])));
+        for (const sub of batch) await walk(sub);
+      } while (batch.length);
+    }
+  };
+  for (const en of entries) await walk(en);
+  return out;
+}
+
+/* keyboard */
+const TYPING = el => el && (/^(INPUT|SELECT|TEXTAREA)$/.test(el.tagName));
+
+window.addEventListener("keydown", e => {
+  const typing = TYPING(document.activeElement);
+
+  /* Cmd/Ctrl+S saves from anywhere */
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s"){
+    e.preventDefault(); saveShow(); return;
+  }
+  if (e.key === "Escape"){
+    e.preventDefault();
+    if (typing){ document.activeElement.blur(); return; }
+    stopAll(false); return;
+  }
+  if (typing) return;
+  if (e.metaKey || e.ctrlKey) return;
+
+  const k = e.key.toLowerCase();
+
+  if (e.key === " "){ e.preventDefault(); go(); return; }
+  if (e.key === "ArrowDown"){ e.preventDefault(); e.altKey ? moveSel(1)  : selectStep(1);  return; }
+  if (e.key === "ArrowUp"){   e.preventDefault(); e.altKey ? moveSel(-1) : selectStep(-1); return; }
+  if (k === "n"){ e.preventDefault(); selectStep(1); return; }
+  if (k === "p"){ e.preventDefault(); audio(); togglePause(); return; }
+  if (k === "f"){ e.preventDefault(); stopAll(true); return; }
+  if (k === "s"){ e.preventDefault(); if (state.selectedId) stopCue(state.selectedId, true); return; }
+  if (k === "d"){ e.preventDefault(); $("#btnDup").click(); return; }
+  if (k === "r"){ e.preventDefault(); renumber(); return; }
+  if (e.key === "Delete" || e.key === "Backspace"){ e.preventDefault(); $("#btnDel").click(); return; }
+  if (e.key === "Home"){ e.preventDefault(); state.selectedId = state.cues[0]?.id; render(); scrollToSel(); return; }
+  if (e.key === "End"){ e.preventDefault(); state.selectedId = state.cues.at(-1)?.id; render(); scrollToSel(); return; }
+});
+
+/* output device (Chrome/Edge only) */
+(function outputPicker(){
+  const supported = window.AudioContext && "setSinkId" in AudioContext.prototype
+                    && navigator.mediaDevices && navigator.mediaDevices.enumerateDevices;
+  if (!supported) return;
+  const wrap = $("#outWrap"), sel = $("#outDev");
+  wrap.hidden = false;
+
+  async function fill(){
+    let devs = [];
+    try{ devs = await navigator.mediaDevices.enumerateDevices(); }catch(e){}
+    const outs = devs.filter(d => d.kind === "audiooutput");
+    sel.innerHTML = '<option value="">System default</option>' +
+      outs.map((d,i) => `<option value="${esc(d.deviceId)}">${esc(d.label || ("Output " + (i+1)))}</option>`).join("");
+  }
+  fill();
+  sel.onchange = async () => {
+    try{ await audio().setSinkId(sel.value || ""); banner("Audio output switched.", "ok"); }
+    catch(e){ banner("Could not switch output: " + e.message, "err"); }
+  };
+  $("#btnNames").onclick = async () => {
+    try{
+      const s = await navigator.mediaDevices.getUserMedia({ audio:true });
+      s.getTracks().forEach(t => t.stop());
+      await fill();
+    }catch(e){ banner("Permission denied, so device names stay hidden. The list still works.", "err"); }
+  };
+})();
+
+/* don't lose an unsaved show to a stray reload */
+window.addEventListener("beforeunload", e => {
+  if (state.dirty && state.cues.length){ e.preventDefault(); e.returnValue = ""; }
+});
+
+/* first gesture unlocks audio */
+["mousedown","keydown","touchstart"].forEach(ev =>
+  window.addEventListener(ev, () => { audio(); }, { once:true }));
+
+render();
+paintNow();
+</script>
+</body>
+</html>
