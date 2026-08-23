@@ -399,9 +399,27 @@ const cueIndex = id => state.cues.findIndex(c => c.id === id);
 const cueById  = id => state.cues.find(c => c.id === id);
 const hasAudio = cue => decoded.has(lc(cue.file));
 
+/* The Renumber button flattens everything to 1..N. That is its job, and it only
+   ever runs when he asks for it. */
 function renumber(){
   state.cues.forEach((c,i) => c.number = String(i+1));
   markDirty(); render();
+}
+
+/* Numbering for cues that just arrived. Existing numbers are left alone, because
+   a show may be deliberately blocked (101, 102, 201...) and a folder drop or a
+   reorder must not destroy that. */
+function highestNumber(){
+  let max = 0;
+  for (const c of state.cues){
+    const n = parseFloat(c.number);
+    if (isFinite(n) && n > max) max = Math.floor(n);
+  }
+  return max;
+}
+function numberFresh(fresh){
+  let n = highestNumber();
+  for (const c of fresh) c.number = String(++n);
 }
 
 /* ============================================================
@@ -449,7 +467,8 @@ async function ingest(files){
     referenced.add(lc(f.name));
   }
 
-  renumber();
+  if (fresh.length){ numberFresh(fresh); markDirty(); }
+  render();
   await decodeAll(fresh);
   if (!state.selectedId && state.cues.length) state.selectedId = state.cues[0].id;
   render();
@@ -1271,9 +1290,12 @@ $("#showInput").onchange = e => { if (e.target.files[0]) openShowFile(e.target.f
 $("#btnDup").onclick = () => {
   const cue = cueById(state.selectedId); if (!cue) return;
   const copy = Object.assign({}, cue, { id:"c"+(++cueSeq), name: cue.name + " (copy)" });
+  const half = String(parseFloat(cue.number) + 0.5);
+  copy.number = (isFinite(parseFloat(cue.number)) && !state.cues.some(c => c.number === half))
+                ? half : String(highestNumber() + 1);
   state.cues.splice(cueIndex(cue.id)+1, 0, copy);
   state.selectedId = copy.id;
-  renumber();
+  markDirty(); render();
 };
 $("#btnDel").onclick = () => {
   const cue = cueById(state.selectedId); if (!cue) return;
@@ -1282,7 +1304,7 @@ $("#btnDel").onclick = () => {
   stopCue(cue.id, false);
   state.cues.splice(i,1);
   state.selectedId = state.cues[Math.min(i, state.cues.length-1)]?.id || null;
-  renumber();
+  markDirty(); render();
 };
 $("#btnRelevel").onclick = e => {
   const sel = cueById(state.selectedId);
@@ -1398,7 +1420,7 @@ rowsEl.addEventListener("drop", e => {
     let to = cueIndex(row.dataset.id) + (below ? 1 : 0);
     state.cues.splice(to, 0, moved);
     state.selectedId = moved.id;
-    renumber();
+    markDirty(); render();
   }
   dragId = null;
 });
@@ -1413,7 +1435,7 @@ function moveSel(dir){
   if (j < 0 || j >= state.cues.length) return;
   const [c] = state.cues.splice(i,1);
   state.cues.splice(j,0,c);
-  renumber(); scrollToSel();
+  markDirty(); render(); scrollToSel();
 }
 function selectStep(dir){
   const i = cueIndex(state.selectedId);
