@@ -110,6 +110,20 @@ button.danger:hover{background:#8f2f28}
 }
 .cue.live{box-shadow:inset 0 0 0 1px rgba(47,168,224,.5)}
 .cue.missing .fname{color:var(--miss); font-weight:700}
+.cue.ctrl{background:#161d26}
+.cue.ctrl:nth-child(odd){background:#131a22}
+.cue.ctrl.sel{background:var(--sel)}
+.cue.isfade{box-shadow:inset 3px 0 0 #e0a020}
+.cue.isstop{box-shadow:inset 3px 0 0 var(--danger)}
+.cue.ctrl.missing .tgt{color:var(--miss); font-weight:700}
+.tgt{font-size:11.5px}
+.badge2{font:700 8.5px/1 ui-monospace,Menlo,monospace; letter-spacing:.08em; color:#0d1014;
+  background:#e0a020; border-radius:3px; padding:3px 4px}
+.badge2.stopb{background:var(--danger); color:#fff}
+.dim{font-size:11px; color:var(--faint)}
+.ctr{text-align:center}
+.cue.ctrl .time b{color:var(--warn)}
+.cue.isstop .time b{color:var(--danger)}
 .cue.drop-above{border-top:2px solid var(--go)}
 .cue.drop-below{border-bottom:2px solid var(--go)}
 .cue > *{position:relative; z-index:1}
@@ -221,6 +235,9 @@ body.dragging::before{
   <button id="btnOpen">Open Show</button>
   <span class="sep"></span>
   <button id="btnRenumber">Renumber</button>
+  <button id="btnFade" title="Insert a Fade cue that ramps the selected cue's level">&#9660; Fade cue</button>
+  <button id="btnStopCue" title="Insert a Stop cue that kills the selected cue dead">&#9632; Stop cue</button>
+  <span class="sep"></span>
   <button id="btnDup">Duplicate</button>
   <button id="btnDel">Delete</button>
   <button id="btnRelevel" title="Sets the selected cue back to its automatic level. Shift-click to do every cue in the show.">Re-level</button>
@@ -380,8 +397,58 @@ function newCue(file){
     loop: false,
     duration: 0,
     start: 0,          /* trim in, seconds into the file  */
-    end: 0             /* trim out; 0 means "play to the end" */
+    end: 0,            /* trim out; 0 means "play to the end" */
+    type: "audio",     /* "audio" or "fade" */
+    target: ""         /* fade cues only: cue number to act on, or "*" for everything */
   };
+}
+
+const isFade = cue => cue && cue.type === "fade";
+const isStop = cue => cue && cue.type === "stop";
+const isCtrl = cue => isFade(cue) || isStop(cue);   /* control cues carry no audio */
+
+/* A fade cue targeting the cue you had selected. Level defaults to full out. */
+function newFadeCue(src){
+  const c = newCue(null);
+  c.type = "fade";
+  c.target = src ? src.number : "*";
+  c.name = src ? "Fade " + src.name : "Fade all";
+  c.gainDb = -60;                 /* -60 reads as OUT and stops the target */
+  c.fadeOut = 3;                  /* the fade time */
+  c.file = "";
+  return c;
+}
+function newStopCue(src){
+  const c = newCue(null);
+  c.type = "stop";
+  c.target = src ? src.number : "*";
+  c.name = src ? "Stop " + src.name : "Stop all";
+  c.fadeOut = 0;
+  c.file = "";
+  return c;
+}
+const fadeTargetOf = cue => cue.target === "*" ? null : state.cues.find(c => c.number === cue.target);
+
+function fireStop(cue, when, depth){
+  const c = audio();
+  const t0 = when != null ? when : c.currentTime + 0.02;
+  const tgt = fadeTargetOf(cue);
+  let hit = 0;
+  for (const inst of [...playing.values()]){
+    if (cue.target !== "*" && (!tgt || inst.cueId !== tgt.id)) continue;
+    stopInstance(inst, 0);
+    hit++;
+  }
+  if (cue.target === "*") clearFollows();
+  banner(hit ? "" : "Cue " + cue.number + ": nothing playing on "
+         + (cue.target === "*" ? "any cue" : "cue " + cue.target) + ".", hit ? "" : "err");
+  const delay = Math.max(0, +cue.followDelay || 0);
+  const nextIdx = cueIndex(cue.id) + 1;
+  if (nextIdx > 0 && nextIdx < state.cues.length && cue.follow !== "hold"){
+    if (cue.follow === "continue" && delay <= 0.001 && depth < 64) fire(state.cues[nextIdx], t0, depth + 1);
+    else scheduleFollow(t0 + delay, cue.id);
+  }
+  paintNow(); render();
 }
 
 /* Resolved trim points, clamped to whatever the file actually is. */
@@ -570,7 +637,7 @@ function applyLevels(freshCues){
 }
 
 function reportMissing(){
-  const miss = state.cues.filter(c => c.file && !hasAudio(c));
+  const miss = state.cues.filter(c => !isCtrl(c) && c.file && !hasAudio(c));
   if (miss.length){
     banner(miss.length + (miss.length === 1 ? " cue needs" : " cues need") +
            " audio. Drop the show's audio folder onto this window, or hit Relink Folder.", "err");
@@ -613,8 +680,59 @@ function clearFollows(){
   timers.clear();
 }
 
+/* Ramp one running instance to a new level. Fading to -60 or below hands off to
+   stopInstance, which ramps and then actually stops the source. */
+function fadeInstance(inst, toDb, secs, when){
+  const c = audio();
+  const now = when != null ? Math.max(when, c.currentTime) : c.currentTime;
+  if (toDb <= -60){ stopInstance(inst, secs); return; }
+  if (inst.stopping) return;          /* already on its way out; a fade cannot rescue it */
+  const to = Math.max(dbToLin(toDb), 2e-5);
+  try{
+    const from = Math.max(inst.gain.gain.value, 2e-5);
+    inst.gain.gain.cancelScheduledValues(now);
+    inst.gain.gain.setValueAtTime(from, now);
+    if (secs > 0) inst.gain.gain.exponentialRampToValueAtTime(to, now + secs);
+    else inst.gain.gain.setValueAtTime(to, now);
+  }catch(e){}
+}
+
+function fireFade(cue, when, depth){
+  const c = audio();
+  const t0 = when != null ? when : c.currentTime + 0.02;
+  const secs = Math.max(0, +cue.fadeOut || 0);
+  const toDb = +cue.gainDb;
+  const tgt = fadeTargetOf(cue);
+  let hit = 0;
+  for (const inst of [...playing.values()]){
+    if (cue.target !== "*" && (!tgt || inst.cueId !== tgt.id)) continue;
+    fadeInstance(inst, toDb, secs, t0);
+    hit++;
+  }
+  if (!hit){
+    banner("Cue " + cue.number + ": nothing playing on "
+           + (cue.target === "*" ? "any cue" : "cue " + cue.target) + ".", "err");
+  } else {
+    banner("");
+  }
+  /* a fade cue's "end" is the end of its ramp, so Follow-end works off that */
+  const delay = Math.max(0, +cue.followDelay || 0);
+  const nextIdx = cueIndex(cue.id) + 1;
+  if (nextIdx > 0 && nextIdx < state.cues.length){
+    if (cue.follow === "continue"){
+      if (delay <= 0.001 && depth < 64) fire(state.cues[nextIdx], t0, depth + 1);
+      else scheduleFollow(t0 + delay, cue.id);
+    } else if (cue.follow === "follow"){
+      scheduleFollow(t0 + secs + delay, cue.id);
+    }
+  }
+  paintNow(); render();
+}
+
 function fire(cue, when, depth, fromTime){
   depth = depth || 0;
+  if (isFade(cue)){ fireFade(cue, when, depth || 0); return; }
+  if (isStop(cue)){ fireStop(cue, when, depth || 0); return; }
   const d = decoded.get(lc(cue.file));
   if (!d){ reportMissing(); return; }
   const c = audio();
@@ -685,7 +803,7 @@ function chainEnd(idx){
     const c = state.cues[i];
     if (!c) break;
     if (c.follow === "hold") break;
-    if (c.follow === "follow" && c.loop) break;
+    if (c.follow === "follow" && c.loop && !isFade(c)) break;
     if (i + 1 >= state.cues.length) break;
     i++;
   }
@@ -781,7 +899,56 @@ function render(){
   wfDraw();
 }
 
+function targetOptions(cue){
+  const opts = ['<option value="*"' + (cue.target === "*" ? " selected" : "") + '>Everything</option>'];
+  for (const c of state.cues){
+    if (isCtrl(c)) continue;
+    const sel = c.number === cue.target ? " selected" : "";
+    opts.push(`<option value="${esc(c.number)}"${sel}>${esc(c.number)} &middot; ${esc(c.name)}</option>`);
+  }
+  return opts.join("");
+}
+
+/* Fade and Stop cues act on another cue, so their row shows a target picker where an
+   audio cue shows its file, and no level or loop of their own. */
+function ctrlRow(cue){
+  const fade = isFade(cue);
+  const cls = ["rowbase","cue","ctrl", fade ? "isfade" : "isstop",
+    cue.id === state.selectedId ? "sel" : "",
+    (cue.target !== "*" && !fadeTargetOf(cue)) ? "missing" : ""].join(" ");
+  const secs = Math.max(0, +cue.fadeOut || 0);
+  const out = cue.gainDb <= -60;
+  const summary = fade
+    ? `<b>${out ? "OUT" : (cue.gainDb > 0 ? "+" : "") + cue.gainDb.toFixed(1) + " dB"}</b>${secs ? "over " + secs + "s" : "snap"}`
+    : `<b>STOP</b>now`;
+  return `
+<div class="${cls}" data-id="${cue.id}" draggable="true">
+  <div class="handle" title="Drag to reorder">&#8942;&#8942;</div>
+  <input class="num" data-f="number" value="${esc(cue.number)}" aria-label="Cue number">
+  <input class="nm"  data-f="name"   value="${esc(cue.name)}" aria-label="Cue name">
+  <select class="tgt" data-f="target" aria-label="Target cue">${targetOptions(cue)}</select>
+  <div class="lvl">${fade ? `
+    <span class="badge2">FADE</span>
+    <input type="range" data-f="gainDb" min="-60" max="12" step="0.5" value="${cue.gainDb}" aria-label="Fade to level">
+    <span class="db" data-db="${cue.id}">${out ? "OUT" : cue.gainDb.toFixed(1) + " dB"}</span>`
+    : `<span class="badge2 stopb">STOP</span><span class="dim">hard stop, no fade</span>`}
+  </div>
+  <div class="dim ctr">&mdash;</div>
+  ${fade
+    ? `<input class="mini" type="number" data-f="fadeOut" min="0" max="600" step="0.5" value="${cue.fadeOut}" title="Fade time in seconds" aria-label="Fade time">`
+    : `<div class="dim ctr">&mdash;</div>`}
+  <select data-f="follow" aria-label="Follow mode">
+    ${FOLLOWS.map(([v,l]) => `<option value="${v}"${cue.follow===v?" selected":""}>${l}</option>`).join("")}
+  </select>
+  <input class="mini" type="number" data-f="followDelay" min="0" max="3600" step="0.5" value="${cue.followDelay}" aria-label="Wait seconds">
+  <div class="dim ctr">&mdash;</div>
+  <div class="time">${summary}</div>
+  <div class="rowbtns"><button data-act="play" title="Fire this cue now">&#9654;</button></div>
+</div>`;
+}
+
 function cueRow(cue){
+  if (isCtrl(cue)) return ctrlRow(cue);
   const live = [...playing.values()].some(i => i.cueId === cue.id);
   const cls = ["rowbase","cue",
     cue.id === state.selectedId ? "sel" : "",
@@ -816,6 +983,7 @@ function cueRow(cue){
 
 function paintTimes(now){
   for (const cue of state.cues){
+    if (isCtrl(cue)) continue;
     const insts = [...playing.values()].filter(i => i.cueId === cue.id);
     const cell = document.querySelector(`[data-time="${cue.id}"]`);
     const bar  = document.querySelector(`[data-prog="${cue.id}"]`);
@@ -864,7 +1032,8 @@ function serialize(){
       fadeIn:c.fadeIn, fadeOut:c.fadeOut,
       follow:c.follow, followDelay:c.followDelay,
       loop:c.loop, duration:c.duration,
-      start:c.start, end:c.end
+      start:c.start, end:c.end,
+      type:c.type || "audio", target:c.target || ""
     }))
   }, null, 2);
 }
@@ -957,6 +1126,9 @@ async function openShowFile(file, handle){
     cue.duration = +c.duration || 0;
     cue.start = +c.start || 0;
     cue.end = +c.end || 0;
+    cue.type = (c.type === "fade" || c.type === "stop") ? c.type : "audio";
+    cue.target = c.target != null ? String(c.target) : "";
+    if (cue.type !== "audio"){ cue.file = ""; cue.needsLevel = false; }
     return cue;
   });
   state.selectedId = state.cues[0]?.id || null;
@@ -1126,6 +1298,11 @@ function wfDraw(){
   if (!m){
     wrap.hidden = true; none.hidden = false;
     none.textContent = !cue ? "Select a cue to see its waveform."
+      : isFade(cue) ? "Fade cue — it ramps cue " + (cue.target === "*" ? "everything" : cue.target)
+                      + " to " + (cue.gainDb <= -60 ? "silence" : cue.gainDb + " dB")
+                      + " over " + (+cue.fadeOut || 0) + "s. No audio of its own."
+      : isStop(cue) ? "Stop cue — it cuts cue " + (cue.target === "*" ? "everything" : cue.target)
+                      + " dead. No audio of its own."
       : (cue.file && !hasAudio(cue)) ? "This cue is missing its audio. Drop the folder in to relink it."
       : "No audio on this cue.";
     wfBar(); return;
@@ -1307,6 +1484,21 @@ $("#fileInput").onchange = e => { ingest([...e.target.files]); e.target.value = 
 $("#dirInput").onchange  = e => { ingest([...e.target.files]); e.target.value = ""; };
 $("#showInput").onchange = e => { if (e.target.files[0]) openShowFile(e.target.files[0]); e.target.value = ""; };
 
+function insertCtrl(make){
+  const sel = cueById(state.selectedId);
+  const cue = make(sel && !isCtrl(sel) ? sel : null);
+  const at = sel ? cueIndex(sel.id) + 1 : state.cues.length;
+  cue.number = String(highestNumber() + 1);
+  state.cues.splice(at, 0, cue);
+  state.selectedId = cue.id;
+  markDirty(); render(); scrollToSel();
+  banner(cue.type === "fade"
+    ? "Fade cue added. Pick its target, set the level it fades to, and the fade time."
+    : "Stop cue added. Pick its target. It cuts with no fade.", "ok");
+}
+$("#btnFade").onclick = () => insertCtrl(newFadeCue);
+$("#btnStopCue").onclick = () => insertCtrl(newStopCue);
+
 $("#btnDup").onclick = () => {
   const cue = cueById(state.selectedId); if (!cue) return;
   const copy = Object.assign({}, cue, { id:"c"+(++cueSeq), name: cue.name + " (copy)" });
@@ -1366,7 +1558,7 @@ rowsEl.addEventListener("click", e => {
   const cue = cueById(btn.closest(".cue").dataset.id); if (!cue) return;
   wake();
   if (btn.dataset.act === "play") fire(cue);
-  else stopCue(cue.id, true);
+  else if (!isCtrl(cue)) stopCue(cue.id, true);
 });
 
 $("#nowlist").addEventListener("click", e => {
@@ -1385,6 +1577,13 @@ rowsEl.addEventListener("input", e => {
   else if (f === "gainDb"){
     cue.gainDb = +e.target.value;
     const lbl = document.querySelector(`[data-db="${cue.id}"]`);
+    if (isFade(cue)){
+      if (lbl) lbl.textContent = cue.gainDb <= -60 ? "OUT" : cue.gainDb.toFixed(1) + " dB";
+      const t = e.target.closest(".cue").querySelector(".time");
+      if (t) t.innerHTML = `<b>${cue.gainDb <= -60 ? "OUT" : (cue.gainDb>0?"+":"") + cue.gainDb.toFixed(1) + " dB"}</b>`
+                         + (cue.fadeOut ? "over " + (+cue.fadeOut) + "s" : "snap");
+      markDirty(); return;
+    }
     if (lbl){
       lbl.textContent = cue.gainDb.toFixed(1) + " dB";
       lbl.classList.toggle("ceiling", cue.gainDb >= MAX_BOOST_DB - 0.01);
@@ -1405,9 +1604,10 @@ rowsEl.addEventListener("input", e => {
 
 rowsEl.addEventListener("change", e => {
   const f = e.target.dataset.f;
-  if (f !== "follow") return;
   const cue = cueById(e.target.closest(".cue").dataset.id);
-  if (cue){ cue.follow = e.target.value; markDirty(); }
+  if (!cue) return;
+  if (f === "follow"){ cue.follow = e.target.value; markDirty(); }
+  else if (f === "target"){ cue.target = e.target.value; markDirty(); render(); }
 });
 
 /* reorder by dragging rows */

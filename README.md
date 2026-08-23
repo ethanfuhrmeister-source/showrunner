@@ -147,6 +147,34 @@ puts the whole file back.
 
 Trimming never touches your audio file. It's just numbers in the show file.
 
+## Fade cues and Stop cues
+
+Not every cue plays audio. Two kinds act on a cue that's already running, so a fade
+becomes a numbered cue you fire in sequence instead of something you have to remember
+to do by hand.
+
+**Fade cue** — ramps its target to a level over a time.
+
+- Pick the target where an audio cue shows its filename.
+- The fader sets the level it fades **to**. Drag it all the way down and it reads
+  **OUT** — that fades to silence and stops the target.
+- The **Out** column is the fade time.
+- Fade *up* too. Set it to −6 dB and a bed that was sitting at −20 comes up under a
+  scene, still running.
+
+**Stop cue** — cuts its target dead. No fade, no fade time.
+
+Both can target **Everything** instead of one cue, so an end-of-show "stop all" can be
+a real cue at the bottom of your list.
+
+Add them with **Fade cue** and **Stop cue** in the toolbar. Whatever cue you have
+selected becomes the target, so select the music, then click Fade.
+
+They obey Follow and Wait like any other cue. A Fade cue's "end" is the end of its
+ramp, so **Follow end** on a 10 second fade fires the next cue 10 seconds later.
+
+Firing one at a cue that isn't playing does nothing and tells you so.
+
 ## Cues stack
 
 Firing a cue does not stop the one before it. Music keeps running under your
