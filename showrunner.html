@@ -50,7 +50,7 @@ header{
   padding:5px 7px; flex:1 1 auto; width:100%;
 }
 .showname:hover{border-color:var(--line)}
-.dirty{color:var(--warn); font-size:18px; visibility:hidden}
+.dirty{color:#0d1014; background:var(--warn); font:700 10px/1 -apple-system,sans-serif;letter-spacing:.06em; padding:4px 6px; border-radius:4px; visibility:hidden; white-space:nowrap}
 .dirty.on{visibility:visible}
 
 .hdr-actions{display:flex; gap:8px; flex-wrap:wrap}
@@ -212,7 +212,7 @@ body.dragging::before{
   <div class="brand">
     <span class="logo">&#9654;</span>
     <input id="showName" class="showname" value="Untitled Show" spellcheck="false" aria-label="Show name">
-    <span id="dirty" class="dirty" title="Unsaved changes">&#9679;</span>
+    <span id="dirty" class="dirty" title="Unsaved changes — press \u2318S / Ctrl+S">&#9679; UNSAVED</span>
   </div>
   <div class="hdr-actions">
     <button id="btnGo" class="go">GO<kbd>space</kbd></button>
@@ -625,16 +625,28 @@ function autoLevel(cue){
    new, or that were saved without a level at all, get their fader moved. */
 function applyLevels(freshCues){
   const fresh = new Set((freshCues || []).map(c => c.id));
+  let changed = false;
+  const near = (a,b) => Math.abs((+a||0) - (+b||0)) < 0.002;
   for (const cue of state.cues){
     const d = decoded.get(lc(cue.file));
     if (!d) continue;
-    cue.duration = d.buffer.duration;
-    if (!(+cue.end > 0) || cue.end > cue.duration + 0.001) cue.end = cue.duration;
-    cue.start = clamp(+cue.start || 0, 0, Math.max(0, cue.end - 0.02));
+    const dur = d.buffer.duration;
+    if (!near(cue.duration, dur)){ cue.duration = dur; changed = true; }
+    if (!(+cue.end > 0) || cue.end > cue.duration + 0.001){
+      if (!near(cue.end, cue.duration)){ changed = true; }
+      cue.end = cue.duration;
+    }
+    const st = clamp(+cue.start || 0, 0, Math.max(0, cue.end - 0.02));
+    if (!near(cue.start, st)){ cue.start = st; changed = true; }
     cue.autoGainDb = autoLevel(cue);
-    if (fresh.has(cue.id) || cue.needsLevel){ cue.gainDb = cue.autoGainDb; cue.needsLevel = false; }
+    if (fresh.has(cue.id) || cue.needsLevel){
+      if (!near(cue.gainDb, cue.autoGainDb)) changed = true;
+      cue.gainDb = cue.autoGainDb; cue.needsLevel = false;
+    }
   }
-  markDirty();
+  /* Only a real change counts. Otherwise every load would light UNSAVED and the
+     badge would stop meaning anything by the end of a tech day. */
+  if (changed) markDirty();
 }
 
 function reportMissing(){
@@ -1112,6 +1124,15 @@ async function openShowFile(file, handle){
   try{ data = JSON.parse(await file.text()); }
   catch(e){ banner("That file isn't readable show data.", "err"); return false; }
   if (!data || !Array.isArray(data.cues)){ banner("That JSON isn't a ShowRunner show file.", "err"); return false; }
+
+  /* Loading a show replaces everything in memory. If the current one has unsaved
+     edits, that is a whole tech session's worth of level and trim work, so ask. */
+  if (state.dirty && state.cues.length){
+    const ok = confirm("\"" + state.showName + "\" has UNSAVED changes.\n\n"
+      + "Loading " + file.name + " will throw them away.\n\n"
+      + "Cancel, then press " + (navigator.platform.indexOf("Mac") >= 0 ? "\u2318S" : "Ctrl+S") + " to save first.");
+    if (!ok) return false;
+  }
 
   /* Only adopt a handle once we know the file is really a show, otherwise the
      next Save would overwrite whatever he actually picked. */
