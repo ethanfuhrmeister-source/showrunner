@@ -60,6 +60,7 @@ button.go:hover{background:var(--go)}
 button.warn{background:#6b5010; border-color:var(--warn)}
 button.warn:hover{background:#8a6714}
 button.warn.on{background:var(--warn); color:#0d1014}
+.toolbar button.on{background:#1d5570; border-color:#2a6d8e}
 button.danger{background:#6e241f; border-color:var(--danger)}
 button.danger:hover{background:#8f2f28}
 
@@ -137,6 +138,35 @@ button.danger:hover{background:#8f2f28}
 }
 .empty strong{color:var(--dim); display:block; font-size:19px; margin-bottom:10px}
 
+/* ---------- waveform editor ---------- */
+.editor{
+  border-top:1px solid var(--line); background:var(--bg2);
+  display:flex; flex-direction:column; flex:0 0 auto;
+}
+.editor[hidden]{display:none}
+.edbar{
+  display:flex; align-items:center; gap:10px; flex-wrap:wrap;
+  padding:7px 12px; border-bottom:1px solid var(--line); font-size:12px; color:var(--dim);
+}
+.edtitle{font-weight:700; color:var(--txt); font-size:13px; max-width:280px;
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+.edbar label{display:flex; align-items:center; gap:5px; font-size:11px;
+  letter-spacing:.05em; text-transform:uppercase; color:var(--faint); font-weight:700}
+.edbar input[type=number]{width:76px; text-align:center;
+  font:600 12px/1 ui-monospace,Menlo,monospace}
+.edbar button{padding:5px 10px; font-size:11.5px}
+.edbar .spacer{flex:1}
+.edlen{font:600 12px/1 ui-monospace,Menlo,monospace; color:var(--live)}
+.edhint{font-size:11px; color:var(--faint)}
+.wfwrap{position:relative; height:150px; padding:0 12px 10px}
+#wf{display:block; width:100%; height:100%; border-radius:5px; background:#080b0e;
+  cursor:default; touch-action:none}
+.wfnone{
+  height:150px; display:flex; align-items:center; justify-content:center;
+  color:var(--faint); font-size:13px;
+}
+.wfnone[hidden],.wfwrap[hidden]{display:none}
+
 /* ---------- footer ---------- */
 footer{
   border-top:1px solid var(--line); background:var(--bg2);
@@ -194,6 +224,7 @@ body.dragging::before{
   <button id="btnDup">Duplicate</button>
   <button id="btnDel">Delete</button>
   <button id="btnRelevel">Re-level</button>
+  <button id="btnWave">Waveform</button>
   <span class="spacer"></span>
   <label class="outsel" id="outWrap" hidden>Output
     <select id="outDev"></select>
@@ -218,6 +249,22 @@ body.dragging::before{
     </div>
   </div>
 </div>
+
+<section class="editor" id="editor">
+  <div class="edbar">
+    <span class="edtitle" id="edTitle">No cue selected</span>
+    <label>Start <input id="edStart" type="number" step="0.01" min="0" value="0"></label>
+    <label>End <input id="edEnd" type="number" step="0.01" min="0" value="0"></label>
+    <span class="edlen" id="edLen"></span>
+    <button id="edAudition">Audition<kbd>A</kbd></button>
+    <button id="edReset">Reset trim</button>
+    <span class="spacer"></span>
+    <span class="edhint">Drag the edges to trim &middot; drag the amber tabs up top to fade &middot; click to set the audition point</span>
+    <button id="edHide">Hide</button>
+  </div>
+  <div class="wfwrap" id="wfWrap"><canvas id="wf"></canvas></div>
+  <div class="wfnone" id="wfNone" hidden>Select a cue to see its waveform.</div>
+</section>
 
 <footer>
   <div id="nowlist"></div>
@@ -330,9 +377,23 @@ function newCue(file){
     follow: "hold",          /* hold | continue | follow */
     followDelay: 0,
     loop: false,
-    duration: 0
+    duration: 0,
+    start: 0,          /* trim in, seconds into the file  */
+    end: 0             /* trim out; 0 means "play to the end" */
   };
 }
+
+/* Resolved trim points, clamped to whatever the file actually is. */
+function trimOf(cue){
+  const d = decoded.get(lc(cue.file));
+  const total = d ? d.buffer.duration : (+cue.duration || 0);
+  let a = clamp(+cue.start || 0, 0, total);
+  let b = (+cue.end > 0) ? Math.min(+cue.end, total) : total;
+  if (b <= a + 0.02){ a = 0; b = total; }        /* nonsense trim = whole file */
+  return { total, start:a, end:b, len: Math.max(0, b - a) };
+}
+const cueLen = cue => trimOf(cue).len;
+const isTrimmed = cue => { const t = trimOf(cue); return t.total > 0 && (t.start > 0.001 || t.end < t.total - 0.001); };
 const cueIndex = id => state.cues.findIndex(c => c.id === id);
 const cueById  = id => state.cues.find(c => c.id === id);
 const hasAudio = cue => decoded.has(lc(cue.file));
@@ -396,7 +457,8 @@ async function decodeAll(freshCues){
     banner("Reading audio " + (++done) + " of " + needed.length + " — " + library.get(name).name);
     try{
       const buf = await c.decodeAudioData(await library.get(name).arrayBuffer());
-      decoded.set(name, { buffer: buf, peak: peakOf(buf) });
+      const a = analyze(buf);
+      decoded.set(name, { buffer: buf, peak: a.peak, mins: a.mins, maxs: a.maxs, buckets: a.buckets });
     }catch(e){
       failed.push(library.get(name).name);
       library.delete(name);
@@ -408,13 +470,32 @@ async function decodeAll(freshCues){
   reportMissing();
 }
 
-function peakOf(buffer){
+/* One pass over the samples gets both the true peak and the drawing envelope.
+   Scanning a five minute file twice would be waste. */
+const WF_BUCKETS = 4000;
+function analyze(buffer){
+  const chans = [];
+  for (let c = 0; c < buffer.numberOfChannels; c++) chans.push(buffer.getChannelData(c));
+  const n = chans[0] ? chans[0].length : 0;
+  const buckets = Math.max(1, Math.min(WF_BUCKETS, n));
+  const step = n / buckets;
+  const mins = new Float32Array(buckets), maxs = new Float32Array(buckets);
   let peak = 0;
-  for (let ch = 0; ch < buffer.numberOfChannels; ch++){
-    const d = buffer.getChannelData(ch);
-    for (let i = 0; i < d.length; i++){ const a = d[i] < 0 ? -d[i] : d[i]; if (a > peak) peak = a; }
+  for (let b = 0; b < buckets; b++){
+    const from = Math.floor(b * step), to = Math.min(n, Math.floor((b+1) * step));
+    let mn = 0, mx = 0;
+    for (const d of chans){
+      for (let i = from; i < to; i++){
+        const v = d[i];
+        if (v < mn) mn = v;
+        else if (v > mx) mx = v;
+      }
+    }
+    mins[b] = mn; maxs[b] = mx;
+    const a = mx > -mn ? mx : -mn;
+    if (a > peak) peak = a;
   }
-  return peak || 1;
+  return { peak: peak || 1, mins, maxs, buckets };
 }
 
 /* Peak-normalize: set the fader so the file's loudest peak lands at -3 dBFS. */
@@ -428,6 +509,8 @@ function applyLevels(cues){
     const d = decoded.get(lc(cue.file));
     if (!d) continue;
     cue.duration = d.buffer.duration;
+    if (!(+cue.end > 0) || cue.end > cue.duration + 0.001) cue.end = cue.duration;
+    cue.start = clamp(+cue.start || 0, 0, Math.max(0, cue.end - 0.02));
     cue.autoGainDb = autoLevel(cue);
     if (cues) cue.gainDb = cue.autoGainDb;      /* only auto-set brand new cues */
   }
@@ -478,16 +561,25 @@ function clearFollows(){
   timers.clear();
 }
 
-function fire(cue, when, depth){
+function fire(cue, when, depth, fromTime){
   depth = depth || 0;
   const d = decoded.get(lc(cue.file));
   if (!d){ reportMissing(); return; }
   const c = audio();
   const t0 = when != null ? when : c.currentTime + 0.02;
 
+  const tr = trimOf(cue);
+  /* fromTime is the audition case: start somewhere inside the file, ignore the trim in */
+  const offset = fromTime != null ? clamp(fromTime, 0, Math.max(0, tr.total - 0.02)) : tr.start;
+  const playLen = Math.max(0.02, (fromTime != null ? tr.total : tr.end) - offset);
+
   const src = c.createBufferSource();
   src.buffer = d.buffer;
-  src.loop = !!cue.loop;
+  if (cue.loop && fromTime == null){
+    src.loop = true;
+    src.loopStart = tr.start;
+    src.loopEnd = tr.end;
+  }
 
   const g = c.createGain();
   src.connect(g); g.connect(masterGain);
@@ -507,15 +599,20 @@ function fire(cue, when, depth){
 
   /* No automatic tail fade. "Out" is the fade time used when you stop this cue --
      an auto fade over the last seconds of every file would wreck a door slam. */
-  const dur = d.buffer.duration;
+  const dur = playLen;
 
-  src.start(t0);
+  /* Looping sources ignore a duration argument, so they get the loop window instead. */
+  if (src.loop) src.start(t0, offset);
+  else src.start(t0, offset, playLen);
+
   const id = "i" + (++instSeq);
-  const inst = { id, cueId: cue.id, src, gain: g, t0, dur, endsAt: t0 + dur, loop: !!cue.loop, stopping:false };
+  const inst = { id, cueId: cue.id, src, gain: g, t0, dur, endsAt: t0 + dur,
+                 loop: !!src.loop, offset, winStart: tr.start, winEnd: tr.end, stopping:false };
   playing.set(id, inst);
   src.onended = () => { if (playing.has(id)) playing.delete(id); paintNow(); };
 
-  /* chain */
+  /* chain -- but an audition is just listening, it fires nothing */
+  if (fromTime != null){ paintNow(); render(); return; }
   const delay = Math.max(0, +cue.followDelay || 0);
   const nextIdx = cueIndex(cue.id) + 1;
   if (nextIdx > 0 && nextIdx < state.cues.length){
@@ -614,6 +711,7 @@ function paintLoop(){
   }
   paintTimes(now);
   if (gone) paintNow();
+  if (!wf.hidden && playing.size) wfDraw();
 }
 
 /* ============================================================
@@ -628,6 +726,7 @@ function render(){
   $("#showName").value = state.showName;
   paintNow();
   if (ctx) paintTimes(ctx.currentTime);
+  wfDraw();
 }
 
 function cueRow(cue){
@@ -655,7 +754,7 @@ function cueRow(cue){
   </select>
   <input class="mini" type="number" data-f="followDelay" min="0" max="3600" step="0.5" value="${cue.followDelay}" aria-label="Wait seconds">
   <div class="chk"><input type="checkbox" data-f="loop"${cue.loop?" checked":""} aria-label="Loop"></div>
-  <div class="time" data-time="${cue.id}">${mmss(cue.duration)}</div>
+  <div class="time" data-time="${cue.id}"${isTrimmed(cue) ? ' title="Trimmed"' : ""}>${(isTrimmed(cue)?"\u2702 ":"")+mmss(cueLen(cue))}</div>
   <div class="rowbtns">
     <button data-act="play" title="Play this cue">&#9654;</button>
     <button data-act="stop" title="Fade this cue out">&#9632;</button>
@@ -677,7 +776,7 @@ function paintTimes(now){
       cell.innerHTML = "<b>-" + mmss(left) + "</b>" + mmss(inst.dur) + (insts.length > 1 ? " &times;"+insts.length : "");
       if (bar) bar.style.width = (inst.dur ? (pos/inst.dur*100) : 0) + "%";
     } else {
-      cell.textContent = mmss(cue.duration);
+      cell.textContent = (isTrimmed(cue) ? "\u2702 " : "") + mmss(cueLen(cue));
       if (bar) bar.style.width = "0";
     }
   }
@@ -712,7 +811,8 @@ function serialize(){
       gainDb:c.gainDb, autoGainDb:c.autoGainDb,
       fadeIn:c.fadeIn, fadeOut:c.fadeOut,
       follow:c.follow, followDelay:c.followDelay,
-      loop:c.loop, duration:c.duration
+      loop:c.loop, duration:c.duration,
+      start:c.start, end:c.end
     }))
   }, null, 2);
 }
@@ -755,6 +855,8 @@ async function openShowFile(file){
     cue.followDelay = +c.followDelay || 0;
     cue.loop = !!c.loop;
     cue.duration = +c.duration || 0;
+    cue.start = +c.start || 0;
+    cue.end = +c.end || 0;
     return cue;
   });
   state.selectedId = state.cues[0]?.id || null;
@@ -765,6 +867,328 @@ async function openShowFile(file){
   await decodeAll(null);
   render();
   reportMissing();
+}
+
+/* ============================================================
+   Waveform editor
+   ============================================================ */
+const wf = { canvas:null, g:null, off:null, offg:null, key:"", w:0, h:0,
+             markAt:null, drag:null, hidden:false };
+
+const round2 = v => Math.round(v * 100) / 100;
+
+function wfMetrics(){
+  if (wf.hidden) return null;
+  const cue = cueById(state.selectedId);
+  const d = cue ? decoded.get(lc(cue.file)) : null;
+  if (!cue || !d || !wf.w) return null;
+  const tr = trimOf(cue);
+  if (!tr.total) return null;
+  const W = wf.w, H = wf.h;
+  return {
+    cue, d, tr, W, H,
+    top: 5, bot: H - 19,
+    xOf: t => clamp(t / tr.total, 0, 1) * W,
+    tOf: x => clamp(x / W, 0, 1) * tr.total
+  };
+}
+
+/* Where the gain sits at time t, 0..1, following the same curves playback uses. */
+function gainFrac(cue, tr, t){
+  let f = 1;
+  const fi = Math.max(0, +cue.fadeIn || 0), fo = Math.max(0, +cue.fadeOut || 0);
+  if (fi > 0 && t < tr.start + fi)
+    f = Math.min(f, FADE_FLOOR * Math.pow(1/FADE_FLOOR, (t - tr.start) / fi));
+  if (fo > 0 && t > tr.end - fo)
+    f = Math.min(f, Math.pow(0.001, (t - (tr.end - fo)) / fo));
+  return clamp(f, 0, 1);
+}
+
+function wfMeasure(){
+  if (!wf.canvas) return;
+  const r = wf.canvas.getBoundingClientRect();
+  const w = Math.max(60, Math.round(r.width)), h = Math.max(50, Math.round(r.height));
+  if (w !== wf.w || h !== wf.h){ wf.w = w; wf.h = h; wf.key = ""; }
+}
+
+/* The waveform, trim shading, fade curves, handles and ruler go to an offscreen
+   canvas once. Only the playhead and marker get redrawn on every paint. */
+function wfStatic(m){
+  const dpr = window.devicePixelRatio || 1;
+  if (!wf.off){ wf.off = document.createElement("canvas"); wf.offg = wf.off.getContext("2d"); }
+  if (wf.off.width !== m.W * dpr || wf.off.height !== m.H * dpr){
+    wf.off.width = m.W * dpr; wf.off.height = m.H * dpr;
+  }
+  const g = wf.offg;
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.clearRect(0, 0, m.W, m.H);
+
+  const mid = (m.top + m.bot) / 2, half = (m.bot - m.top) / 2;
+  const sx = m.xOf(m.tr.start), ex = m.xOf(m.tr.end);
+
+  g.fillStyle = "#080b0e"; g.fillRect(0, 0, m.W, m.H);
+
+  /* waveform, bright inside the trim window and dim outside it */
+  const per = m.d.buckets / m.W;
+  for (let px = 0; px < m.W; px++){
+    const b0 = Math.floor(px * per), b1 = Math.max(b0 + 1, Math.floor((px + 1) * per));
+    let mn = 0, mx = 0;
+    for (let b = b0; b < b1 && b < m.d.buckets; b++){
+      if (m.d.mins[b] < mn) mn = m.d.mins[b];
+      if (m.d.maxs[b] > mx) mx = m.d.maxs[b];
+    }
+    const inside = px >= sx - 0.5 && px <= ex + 0.5;
+    g.fillStyle = inside ? "#3f9ecb" : "#232b33";
+    const y1 = mid - mx * half, y2 = mid - mn * half;
+    g.fillRect(px, y1, 1, Math.max(1, y2 - y1));
+  }
+
+  /* centre line */
+  g.fillStyle = "rgba(255,255,255,.10)"; g.fillRect(0, mid, m.W, 1);
+
+  /* trimmed-away thirds knocked back */
+  g.fillStyle = "rgba(4,7,10,.62)";
+  if (sx > 0) g.fillRect(0, 0, sx, m.bot + 1);
+  if (ex < m.W) g.fillRect(ex, 0, m.W - ex, m.bot + 1);
+
+  /* the strip the fade tabs live in */
+  g.fillStyle = "rgba(224,160,32,.07)";
+  g.fillRect(0, 0, m.W, FADE_BAND);
+
+  /* fade curves, mirrored around the centre */
+  const fi = Math.max(0, +m.cue.fadeIn || 0), fo = Math.max(0, +m.cue.fadeOut || 0);
+  if (fi > 0 || fo > 0){
+    g.strokeStyle = "#e0a020"; g.lineWidth = 1.6;
+    const from = Math.max(0, sx), to = Math.min(m.W, ex);
+    for (const sign of [-1, 1]){
+      g.beginPath();
+      for (let px = from; px <= to; px += 1.5){
+        const y = mid + sign * half * gainFrac(m.cue, m.tr, m.tOf(px));
+        px === from ? g.moveTo(px, y) : g.lineTo(px, y);
+      }
+      g.stroke();
+    }
+  }
+  /* Grab tabs are drawn even at zero, otherwise there is nothing to grab. */
+  const tab = (x, on) => {
+    g.fillStyle = on ? "#e0a020" : "rgba(224,160,32,.45)";
+    g.fillRect(clamp(x - 5, 0, m.W - 10), 2, 10, 10);
+  };
+  tab(m.xOf(m.tr.start + fi), fi > 0);
+  tab(m.xOf(m.tr.end - fo), fo > 0);
+
+  /* trim handles */
+  const handle = (x, col) => {
+    const cx = clamp(x, 1, m.W - 1);
+    g.fillStyle = col;
+    g.fillRect(cx - 1, FADE_BAND, 2, m.bot + 1 - FADE_BAND);
+    g.fillRect(clamp(cx - 4, 0, m.W - 8), m.bot - 13, 8, 13);
+  };
+  handle(sx, "#1fb85c");
+  handle(ex, "#d8483f");
+
+  /* ruler */
+  g.fillStyle = "rgba(255,255,255,.05)"; g.fillRect(0, m.bot + 1, m.W, m.H - m.bot);
+  const steps = [0.5,1,2,5,10,15,30,60,120,300,600];
+  const step = steps.find(v => m.tr.total / v <= 9) || 900;
+  g.fillStyle = "#5d6b7c";
+  g.font = "10px ui-monospace,Menlo,monospace";
+  g.textBaseline = "top";
+  for (let t = 0; t <= m.tr.total + 0.001; t += step){
+    const x = m.xOf(t);
+    g.fillRect(x, m.bot + 1, 1, 4);
+    if (x < m.W - 26) g.fillText(mmss(t), x + 3, m.bot + 5);
+  }
+}
+
+function wfPlayhead(m){
+  if (!ctx) return null;
+  let last = null;
+  for (const i of playing.values()) if (i.cueId === m.cue.id) last = i;
+  if (!last) return null;
+  const el = Math.max(0, ctx.currentTime - last.t0);
+  if (last.loop){
+    const span = Math.max(0.02, last.winEnd - last.winStart);
+    return last.winStart + (((last.offset - last.winStart) + el) % span);
+  }
+  return Math.min(last.offset + el, last.offset + last.dur);
+}
+
+function wfDraw(){
+  const pane = $("#editor");
+  if (!pane || wf.hidden) return;
+  wfMeasure();
+  const m = wfMetrics();
+  const cue = cueById(state.selectedId);
+
+  const none = $("#wfNone"), wrap = $("#wfWrap");
+  if (!m){
+    wrap.hidden = true; none.hidden = false;
+    none.textContent = !cue ? "Select a cue to see its waveform."
+      : (cue.file && !hasAudio(cue)) ? "This cue is missing its audio. Drop the folder in to relink it."
+      : "No audio on this cue.";
+    wfBar(); return;
+  }
+  wrap.hidden = false; none.hidden = true;
+
+  const key = [cue.id, cue.file, m.W, m.H, round2(m.tr.start), round2(m.tr.end),
+               round2(cue.fadeIn), round2(cue.fadeOut), cue.loop].join("|");
+  if (key !== wf.key){ wfStatic(m); wf.key = key; }
+
+  const dpr = window.devicePixelRatio || 1;
+  if (wf.canvas.width !== m.W * dpr || wf.canvas.height !== m.H * dpr){
+    wf.canvas.width = m.W * dpr; wf.canvas.height = m.H * dpr;
+  }
+  const g = wf.g;
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.clearRect(0, 0, m.W, m.H);
+  g.drawImage(wf.off, 0, 0, m.W, m.H);
+
+  if (wf.markAt != null){
+    const x = m.xOf(wf.markAt);
+    g.strokeStyle = "#e8eef5"; g.lineWidth = 1; g.setLineDash([3,3]);
+    g.beginPath(); g.moveTo(x, 0); g.lineTo(x, m.bot); g.stroke();
+    g.setLineDash([]);
+  }
+  const ph = wfPlayhead(m);
+  if (ph != null){
+    const x = m.xOf(ph);
+    g.fillStyle = "#2fa8e0"; g.fillRect(x - 1, 0, 2, m.bot + 1);
+    g.beginPath(); g.moveTo(x - 5, 0); g.lineTo(x + 5, 0); g.lineTo(x, 7); g.closePath(); g.fill();
+  }
+  wfBar();
+}
+
+function wfBar(){
+  const cue = cueById(state.selectedId);
+  const t = $("#edTitle"), a = $("#edStart"), b = $("#edEnd"), l = $("#edLen");
+  if (!cue){ t.textContent = "No cue selected"; a.value = 0; b.value = 0; l.textContent = ""; return; }
+  const tr = trimOf(cue);
+  t.textContent = (cue.number ? cue.number + "  " : "") + cue.name;
+  if (document.activeElement !== a) a.value = round2(tr.start);
+  if (document.activeElement !== b) b.value = round2(tr.end);
+  a.max = b.max = round2(tr.total);
+  l.textContent = mmss(tr.len) + (isTrimmed(cue) ? "  of " + mmss(tr.total) : "");
+}
+
+/* refresh the bits a drag changes without a full re-render, which would steal focus */
+function syncCueRow(cue){
+  const row = document.querySelector('.cue[data-id="' + cue.id + '"]');
+  if (row){
+    const fi = row.querySelector('[data-f="fadeIn"]');  if (fi) fi.value = round2(cue.fadeIn);
+    const fo = row.querySelector('[data-f="fadeOut"]'); if (fo) fo.value = round2(cue.fadeOut);
+    const tc = row.querySelector('[data-time]');
+    if (tc && ![...playing.values()].some(i => i.cueId === cue.id))
+      tc.textContent = (isTrimmed(cue) ? "✂ " : "") + mmss(cueLen(cue));
+  }
+}
+
+/* The top strip belongs to the fades, everything under it to the trim handles.
+   Without that split a zero length fade sits directly under a trim handle and can
+   never be grabbed -- which is every freshly imported cue. */
+const FADE_BAND = 20;
+function wfHit(px, py){
+  const m = wfMetrics(); if (!m) return null;
+  const sx = m.xOf(m.tr.start), ex = m.xOf(m.tr.end);
+  const fiX = m.xOf(m.tr.start + Math.max(0, +m.cue.fadeIn || 0));
+  const foX = m.xOf(m.tr.end   - Math.max(0, +m.cue.fadeOut || 0));
+  if (py <= FADE_BAND){
+    const di = Math.abs(px - fiX), doo = Math.abs(px - foX);
+    if (di <= 15 || doo <= 15) return di <= doo ? "fadein" : "fadeout";
+  }
+  if (Math.abs(px - sx) <= 7) return "start";
+  if (Math.abs(px - ex) <= 7) return "end";
+  return "mark";
+}
+
+function wfApply(mode, px){
+  const m = wfMetrics(); if (!m) return;
+  const cue = m.cue, t = m.tOf(px), tr = m.tr;
+  if (mode === "start"){
+    cue.start = round2(clamp(t, 0, tr.end - 0.05));
+    cue.end = round2(tr.end);
+  } else if (mode === "end"){
+    cue.end = round2(clamp(t, tr.start + 0.05, tr.total));
+  } else if (mode === "fadein"){
+    cue.fadeIn = round2(clamp(t - tr.start, 0, tr.len));
+  } else if (mode === "fadeout"){
+    cue.fadeOut = round2(clamp(tr.end - t, 0, tr.len));
+  } else {
+    wf.markAt = round2(clamp(t, 0, tr.total));   /* drawn dynamically, no rebuild */
+    wfDraw(); return;
+  }
+  const len = cueLen(cue);
+  cue.fadeIn = round2(Math.min(cue.fadeIn, len));
+  cue.fadeOut = round2(Math.min(cue.fadeOut, len));
+  if (wf.markAt != null) wf.markAt = clamp(wf.markAt, 0, tr.total);
+  wf.key = "";
+  markDirty(); syncCueRow(cue); wfDraw();
+}
+
+function wfSetup(){
+  wf.canvas = $("#wf");
+  if (!wf.canvas) return;
+  wf.g = wf.canvas.getContext("2d");
+
+  wf.canvas.addEventListener("pointerdown", e => {
+    const m = wfMetrics(); if (!m) return;
+    const r = wf.canvas.getBoundingClientRect();
+    const px = e.clientX - r.left, py = e.clientY - r.top;
+    wf.drag = wfHit(px, py);
+    wf.canvas.setPointerCapture(e.pointerId);
+    wfApply(wf.drag, px);
+    e.preventDefault();
+  });
+  wf.canvas.addEventListener("pointermove", e => {
+    const r = wf.canvas.getBoundingClientRect();
+    const px = e.clientX - r.left, py = e.clientY - r.top;
+    if (wf.drag){ wfApply(wf.drag, px); return; }
+    const hit = wfHit(px, py);
+    wf.canvas.style.cursor = (hit === "start" || hit === "end") ? "col-resize"
+                           : (hit === "fadein" || hit === "fadeout") ? "ew-resize" : "crosshair";
+  });
+  const release = e => {
+    if (!wf.drag) return;
+    wf.drag = null;
+    try{ wf.canvas.releasePointerCapture(e.pointerId); }catch(err){}
+    render();
+  };
+  wf.canvas.addEventListener("pointerup", release);
+  wf.canvas.addEventListener("pointercancel", release);
+
+  if (window.ResizeObserver)
+    new ResizeObserver(() => { wf.key = ""; wfDraw(); }).observe($("#wfWrap"));
+
+  const num = (el, set) => el.addEventListener("input", () => {
+    const cue = cueById(state.selectedId); if (!cue) return;
+    set(cue, +el.value || 0); wf.key = ""; markDirty(); syncCueRow(cue); wfDraw();
+  });
+  num($("#edStart"), (cue, v) => { const tr = trimOf(cue); cue.start = clamp(v, 0, tr.end - 0.05); cue.end = tr.end; });
+  num($("#edEnd"),   (cue, v) => { const tr = trimOf(cue); cue.end = clamp(v, tr.start + 0.05, tr.total); });
+
+  $("#edReset").onclick = () => {
+    const cue = cueById(state.selectedId); if (!cue) return;
+    const tr = trimOf(cue);
+    cue.start = 0; cue.end = tr.total; wf.markAt = null; wf.key = "";
+    markDirty(); render();
+  };
+  $("#edAudition").onclick = audition;
+  $("#edHide").onclick = () => wfToggle(false);
+  $("#btnWave").onclick = () => wfToggle(wf.hidden);
+}
+
+function wfToggle(show){
+  wf.hidden = !show;
+  $("#editor").hidden = wf.hidden;
+  $("#btnWave").classList.toggle("on", !wf.hidden);
+  if (!wf.hidden){ wf.key = ""; wfDraw(); }
+}
+
+function audition(){
+  const cue = cueById(state.selectedId); if (!cue || !hasAudio(cue)) return;
+  wake();
+  const tr = trimOf(cue);
+  fire(cue, null, 0, wf.markAt != null ? wf.markAt : tr.start);
 }
 
 /* ============================================================
@@ -826,8 +1250,9 @@ const rowsEl = $("#rows");
 
 rowsEl.addEventListener("mousedown", e => {
   const row = e.target.closest(".cue"); if (!row) return;
-  state.selectedId = row.dataset.id;
+  if (state.selectedId !== row.dataset.id){ state.selectedId = row.dataset.id; wf.markAt = null; }
   document.querySelectorAll(".cue").forEach(r => r.classList.toggle("sel", r === row));
+  wfDraw();
 });
 
 rowsEl.addEventListener("click", e => {
@@ -868,6 +1293,7 @@ rowsEl.addEventListener("input", e => {
   }
   else if (f === "number" || f === "name") cue[f] = e.target.value;
   else cue[f] = clamp(+e.target.value || 0, 0, 3600);
+  if (f === "fadeIn" || f === "fadeOut" || f === "loop"){ wf.key = ""; wfDraw(); }
   markDirty();
 });
 
@@ -928,7 +1354,9 @@ function moveSel(dir){
 function selectStep(dir){
   const i = cueIndex(state.selectedId);
   const j = clamp(i < 0 ? 0 : i + dir, 0, state.cues.length - 1);
-  state.selectedId = state.cues[j]?.id || null;
+  const id = state.cues[j]?.id || null;
+  if (id !== state.selectedId) wf.markAt = null;
+  state.selectedId = id;
   render(); scrollToSel();
 }
 
@@ -1008,6 +1436,8 @@ window.addEventListener("keydown", e => {
   if (k === "p"){ e.preventDefault(); audio(); togglePause(); return; }
   if (k === "f"){ e.preventDefault(); stopAll(true); return; }
   if (k === "s"){ e.preventDefault(); if (state.selectedId) stopCue(state.selectedId, true); return; }
+  if (k === "a"){ e.preventDefault(); audition(); return; }
+  if (k === "w"){ e.preventDefault(); wfToggle(wf.hidden); return; }
   if (k === "d"){ e.preventDefault(); $("#btnDup").click(); return; }
   if (k === "r"){ e.preventDefault(); renumber(); return; }
   if (e.key === "Delete" || e.key === "Backspace"){ e.preventDefault(); $("#btnDel").click(); return; }
@@ -1053,6 +1483,8 @@ window.addEventListener("beforeunload", e => {
 ["mousedown","keydown","touchstart"].forEach(ev =>
   window.addEventListener(ev, () => { audio(); }, { once:true }));
 
+wfSetup();
+wfToggle(true);
 render();
 paintNow();
 </script>

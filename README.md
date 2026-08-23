@@ -51,6 +51,8 @@ Rename an audio file and that cue won't find it. Keep the names alone.
 | `esc` | **STOP ALL.** Kills everything right now |
 | `⌥↓` `⌥↑` | Move the selected cue up or down the list |
 | `⌘S` / `Ctrl+S` | Save the show |
+| `A` | Audition the selected cue from the marker |
+| `W` | Show or hide the waveform |
 | `D` | Duplicate the selected cue |
 | `Delete` | Delete the selected cue |
 
@@ -74,6 +76,7 @@ up in an audio editor.
 selected it does the whole list.
 
 **In** — seconds to fade up when the cue starts. `0` means it comes in at full level.
+You can drag this on the waveform instead of typing it.
 
 **Out** — seconds to fade out when *you stop the cue*. It does **not** fade the
 end of the file. A door slam plays all the way through and stays a door slam.
@@ -90,8 +93,37 @@ end of the file. A door slam plays all the way through and stays a door slam.
 Chain them and one GO can run a whole sequence. The playhead jumps past the whole
 chain, so your next GO is the next cue *you* have to fire.
 
-**Loop** — plays over and over until you stop it. A looping cue never ends, so
+**Loop** — plays over and over until you stop it. It loops your trimmed section, not
+the whole file, so you can loop a clean bar of music. A looping cue never ends, so
 **Follow end** won't fire off it.
+
+## The waveform
+
+The panel at the bottom shows the selected cue. Click any cue and it follows along.
+`W` hides it when you want the full cue list back.
+
+**Trim the top and tail.** Grab the green bar on the left or the red bar on the right
+and drag. The dimmed parts are the bits you cut — they never play. The cue's length
+in the list updates as you drag, and trimmed cues get a ✂ next to the time.
+
+**Set the fades by hand.** The amber tabs along the top strip are your fade handles.
+Drag the left one right to fade in. Drag the right one left to fade out. The amber
+curve is the real shape of the fade you'll hear, not a straight line — that's why it
+looks bent.
+
+The top strip belongs to the fades. Everything below it belongs to the trim bars. So a
+fade sitting at zero is still grabbable even though it's parked on top of a trim bar.
+
+**Find your cut.** Click anywhere on the waveform to drop a dashed marker, then hit
+**Audition** or press `A` to play from there. Audition ignores the trim and fires no
+follow cues — it's just you listening.
+
+**Watch it run.** The blue playhead tracks the cue while it plays.
+
+**Start** and **End** up top take typed numbers if you want to be exact. **Reset trim**
+puts the whole file back.
+
+Trimming never touches your audio file. It's just numbers in the show file.
 
 ## Cues stack
 
@@ -122,6 +154,7 @@ spinning up a file off the drive mid-scene.
 - Copy the folder to the show computer and open it there.
 - Load your show and check every cue is linked. Missing files turn **red**.
 - Play every cue once, at show volume, through the real speakers.
+- Check your trims. A cue that plays 8 seconds in the list should play 8 seconds.
 - Test your longest follow chain end to end.
 - Find `esc` with your eyes closed.
 - The amber dot by the show name means you have unsaved changes.
