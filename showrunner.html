@@ -217,7 +217,7 @@ body.dragging::before{
   <button id="btnAdd">&#65291; Add Audio&hellip;</button>
   <button id="btnFolder">Relink Folder&hellip;</button>
   <span class="sep"></span>
-  <button id="btnSave">Save Show</button>
+  <button id="btnSave" title="Saves in place once you have picked a spot. Shift-click, or \u2318\u21e7S, to save somewhere new.">Save Show</button>
   <button id="btnOpen">Open Show</button>
   <span class="sep"></span>
   <button id="btnRenumber">Renumber</button>
@@ -244,8 +244,9 @@ body.dragging::before{
     <div id="rows"></div>
     <div id="empty" class="empty">
       <strong>Drop your audio files here</strong>
-      MP3, WAV, AIFF, M4A &mdash; drop a whole folder if you like.<br>
-      Every file becomes a cue, in the order it lands.
+      MP3, WAV, AIFF, M4A &mdash; a whole folder works too.<br>
+      Moving a show between computers? Drop the whole show folder and you get
+      the cue list and its audio in one go.
     </div>
   </div>
 </div>
@@ -413,7 +414,15 @@ async function ingest(files){
     else if (AUDIO_RX.test(f.name) || /^audio\//.test(f.type)) audioFiles.push(f);
   }
 
-  if (showFiles.length){ await openShowFile(showFiles[0]); return; }
+  /* Drop a whole show folder and you get the cue list and its audio in one go.
+     With a show file in the drop we only relink -- a stray mp3 sitting in the
+     folder must not quietly append itself to his cue list. */
+  let relinkOnly = false;
+  if (showFiles.length){
+    if (!await openShowFile(showFiles[0])) return;
+    if (!audioFiles.length) return;
+    relinkOnly = true;
+  }
   if (!audioFiles.length){ banner("Nothing usable in that drop. Audio files or a .show.json, please.", "err"); return; }
 
   audioFiles.sort((a,b) => a.name.localeCompare(b.name, undefined, {numeric:true, sensitivity:"base"}));
@@ -432,6 +441,7 @@ async function ingest(files){
   for (const f of audioFiles){
     if (consumed.has(f)) continue;
     if (referenced.has(lc(f.name))){ library.set(lc(f.name), f); continue; }
+    if (relinkOnly){ library.set(lc(f.name), f); continue; }
     library.set(lc(f.name), f);
     const cue = newCue(f);
     state.cues.push(cue);
@@ -817,24 +827,69 @@ function serialize(){
   }, null, 2);
 }
 
-function saveShow(){
+let showHandle = null;   /* lives for the session only -- nothing is stored anywhere */
+
+const SHOW_TYPES = [{ description:"ShowRunner show", accept:{ "application/json":[".json"] } }];
+
+async function saveShow(saveAs){
   const safe = (state.showName || "Untitled Show").replace(/[^\w\s.-]/g,"").trim() || "Untitled Show";
-  const blob = new Blob([serialize()], { type:"application/json" });
+  const json = serialize();
+
+  /* Chrome and Edge can write the file where you actually want it, and keep
+     writing there. Saves the trip through Downloads entirely. */
+  if (window.showSaveFilePicker){
+    try{
+      if (!showHandle || saveAs){
+        showHandle = await window.showSaveFilePicker({
+          suggestedName: safe + ".show.json", types: SHOW_TYPES
+        });
+      }
+      const w = await showHandle.createWritable();
+      await w.write(json);
+      await w.close();
+      markDirty(false);
+      banner("Saved to " + showHandle.name + ". From now on Save writes straight back there.", "ok");
+      return;
+    }catch(e){
+      if (e && e.name === "AbortError") return;      /* he cancelled the dialog */
+      showHandle = null;                             /* anything else: fall back */
+    }
+  }
+  downloadShow(safe, json);
+}
+
+function downloadShow(safe, json){
   const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob);
+  a.href = URL.createObjectURL(new Blob([json], { type:"application/json" }));
   a.download = safe + ".show.json";
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(a.href), 4000);
   markDirty(false);
-  banner("Saved " + a.download + " to your Downloads folder. Keep it next to your audio.", "ok");
+  banner("Saved " + a.download + " to your Downloads folder. Move it next to your audio.", "ok");
 }
 
-async function openShowFile(file){
+async function openShow(){
+  if (window.showOpenFilePicker){
+    try{
+      const [h] = await window.showOpenFilePicker({ types: SHOW_TYPES, multiple:false });
+      if (await openShowFile(await h.getFile(), h)) return;
+      return;
+    }catch(e){
+      if (e && e.name === "AbortError") return;
+    }
+  }
+  $("#showInput").click();
+}
+
+async function openShowFile(file, handle){
   let data;
   try{ data = JSON.parse(await file.text()); }
-  catch(e){ banner("That file isn't readable show data.", "err"); return; }
-  if (!data || !Array.isArray(data.cues)){ banner("That JSON isn't a ShowRunner show file.", "err"); return; }
+  catch(e){ banner("That file isn't readable show data.", "err"); return false; }
+  if (!data || !Array.isArray(data.cues)){ banner("That JSON isn't a ShowRunner show file.", "err"); return false; }
 
+  /* Only adopt a handle once we know the file is really a show, otherwise the
+     next Save would overwrite whatever he actually picked. */
+  showHandle = handle || null;
   stopAll(false);
   state.showName = data.name || baseName(file.name).replace(/\.show$/i,"");
   state.masterDb = typeof data.masterDb === "number" ? data.masterDb : 0;
@@ -867,6 +922,7 @@ async function openShowFile(file){
   await decodeAll(null);
   render();
   reportMissing();
+  return true;
 }
 
 /* ============================================================
@@ -1198,8 +1254,8 @@ function audition(){
 /* toolbar */
 $("#btnAdd").onclick   = () => $("#fileInput").click();
 $("#btnFolder").onclick= () => $("#dirInput").click();
-$("#btnOpen").onclick  = () => $("#showInput").click();
-$("#btnSave").onclick  = saveShow;
+$("#btnOpen").onclick  = openShow;
+$("#btnSave").onclick  = e => saveShow(e.shiftKey);
 $("#btnRenumber").onclick = renumber;
 
 $("#fileInput").onchange = e => { ingest([...e.target.files]); e.target.value = ""; };
@@ -1417,7 +1473,7 @@ window.addEventListener("keydown", e => {
 
   /* Cmd/Ctrl+S saves from anywhere */
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s"){
-    e.preventDefault(); saveShow(); return;
+    e.preventDefault(); saveShow(e.shiftKey); return;   /* shift = save somewhere new */
   }
   if (e.key === "Escape"){
     e.preventDefault();

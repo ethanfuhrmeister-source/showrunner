@@ -16,8 +16,23 @@ Nothing gets uploaded. Nothing phones home. It runs offline, straight off your d
 
 ## Move it to another computer
 
-Copy `showrunner.html` to a flash drive. That's it. Copy your audio folder and your
-show file too, and keep all three together.
+Keep everything in one folder:
+
+```
+Twelfth Night/
+  showrunner.html
+  Twelfth Night.show.json
+  Audio/
+    01 Preshow.mp3
+    02 Door Slam.mp3
+```
+
+Copy that whole folder to a flash drive, then on the other machine open
+`showrunner.html` and **drag the folder onto the window**. You get the cue list and
+all its audio in one drop. Nothing else to click.
+
+A stray audio file sitting in the folder won't sneak into your show. When a show file
+is in the drop, ShowRunner only relinks what the show already asks for.
 
 ## Build your show
 
@@ -25,17 +40,23 @@ show file too, and keep all three together.
 2. Every file becomes a cue, numbered in order.
 3. Click a name to rename it. Click a number to change it.
 4. Drag the `⋮⋮` handle to move a cue up or down.
-5. Hit **Save Show**. It drops a `.show.json` in your Downloads folder.
+5. Hit **Save Show** and put the file in your show folder, next to your audio.
 
-Move that show file next to your audio folder and keep them together.
+The first save asks where to put it. Every save after that goes straight back to the
+same file — no dialog, no Downloads folder. `⌘S` while you build just works.
+
+To save a copy somewhere else, shift-click **Save Show** or press `⌘⇧S`.
+
+On a browser without file-saving support you'll get a normal download instead. If that
+happens, move the file out of Downloads and into your show folder yourself.
 
 ## Open a show later
 
-Hit **Open Show** and pick your `.show.json`.
+Quickest way: drag the show folder onto the window. Show file and audio, one drop.
 
-Your cues come back, but the audio doesn't — browsers aren't allowed to remember
-where files live on your drive. So drag your audio folder onto the window and every
-cue links back up by filename. One drag and you're live.
+Or hit **Open Show** and pick the `.show.json`. Then drag your audio folder in, because
+browsers aren't allowed to remember where files live on your drive. Every cue links
+back up by filename.
 
 Rename an audio file and that cue won't find it. Keep the names alone.
 
@@ -50,7 +71,8 @@ Rename an audio file and that cue won't find it. Keep the names alone.
 | `F` | Fade out everything |
 | `esc` | **STOP ALL.** Kills everything right now |
 | `⌥↓` `⌥↑` | Move the selected cue up or down the list |
-| `⌘S` / `Ctrl+S` | Save the show |
+| `⌘S` / `Ctrl+S` | Save the show, in place |
+| `⌘⇧S` / `Ctrl+Shift+S` | Save a copy somewhere new |
 | `A` | Audition the selected cue from the marker |
 | `W` | Show or hide the waveform |
 | `D` | Duplicate the selected cue |
@@ -151,8 +173,8 @@ spinning up a file off the drive mid-scene.
 
 ## Before you go into tech
 
-- Copy the folder to the show computer and open it there.
-- Load your show and check every cue is linked. Missing files turn **red**.
+- Copy the whole show folder to the show computer and open it there.
+- Drag the folder onto the window. Check every cue is linked — missing files turn **red**.
 - Play every cue once, at show volume, through the real speakers.
 - Check your trims. A cue that plays 8 seconds in the list should play 8 seconds.
 - Test your longest follow chain end to end.
