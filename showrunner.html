@@ -413,8 +413,9 @@ function newFadeCue(src){
   c.type = "fade";
   c.target = src ? src.number : "*";
   c.name = src ? "Fade " + src.name : "Fade all";
-  c.gainDb = -60;                 /* -60 reads as OUT and stops the target */
+  c.gainDb = -60;                 /* -60 reads as OUT */
   c.fadeOut = 3;                  /* the fade time */
+  c.stopAfter = true;             /* stop the target once the ramp finishes */
   c.file = "";
   return c;
 }
@@ -680,14 +681,13 @@ function clearFollows(){
   timers.clear();
 }
 
-/* Ramp one running instance to a new level. Fading to -60 or below hands off to
-   stopInstance, which ramps and then actually stops the source. */
+/* Ramp one running instance to a new level. Pure level move -- whether the source
+   then stops is the fade cue's decision, not this function's. */
 function fadeInstance(inst, toDb, secs, when){
   const c = audio();
   const now = when != null ? Math.max(when, c.currentTime) : c.currentTime;
-  if (toDb <= -60){ stopInstance(inst, secs); return; }
-  if (inst.stopping) return;          /* already on its way out; a fade cannot rescue it */
-  const to = Math.max(dbToLin(toDb), 2e-5);
+  if (inst.stopping) return false;    /* already on its way out; a fade cannot rescue it */
+  const to = toDb <= -60 ? 1e-4 : Math.max(dbToLin(toDb), 2e-5);
   try{
     const from = Math.max(inst.gain.gain.value, 2e-5);
     inst.gain.gain.cancelScheduledValues(now);
@@ -695,6 +695,7 @@ function fadeInstance(inst, toDb, secs, when){
     if (secs > 0) inst.gain.gain.exponentialRampToValueAtTime(to, now + secs);
     else inst.gain.gain.setValueAtTime(to, now);
   }catch(e){}
+  return true;
 }
 
 function fireFade(cue, when, depth){
@@ -706,7 +707,17 @@ function fireFade(cue, when, depth){
   let hit = 0;
   for (const inst of [...playing.values()]){
     if (cue.target !== "*" && (!tgt || inst.cueId !== tgt.id)) continue;
-    fadeInstance(inst, toDb, secs, t0);
+    if (cue.stopAfter){
+      if (toDb <= -60){
+        stopInstance(inst, secs);           /* ramps to silence and stops the source */
+      } else if (fadeInstance(inst, toDb, secs, t0)){
+        /* fade down to a level, then cut it there */
+        inst.stopping = true; inst.stopAt = t0 + secs;
+        try{ inst.src.stop(t0 + secs + 0.02); }catch(e){}
+      }
+    } else {
+      fadeInstance(inst, toDb, secs, t0);   /* level move only, target keeps running */
+    }
     hit++;
   }
   if (!hit){
@@ -919,7 +930,8 @@ function ctrlRow(cue){
   const secs = Math.max(0, +cue.fadeOut || 0);
   const out = cue.gainDb <= -60;
   const summary = fade
-    ? `<b>${out ? "OUT" : (cue.gainDb > 0 ? "+" : "") + cue.gainDb.toFixed(1) + " dB"}</b>${secs ? "over " + secs + "s" : "snap"}`
+    ? `<b>${out ? "OUT" : (cue.gainDb > 0 ? "+" : "") + cue.gainDb.toFixed(1) + " dB"}</b>`
+      + (secs ? secs + "s" : "snap") + (cue.stopAfter ? " &rarr; stop" : " &middot; runs on")
     : `<b>STOP</b>now`;
   return `
 <div class="${cls}" data-id="${cue.id}" draggable="true">
@@ -941,7 +953,10 @@ function ctrlRow(cue){
     ${FOLLOWS.map(([v,l]) => `<option value="${v}"${cue.follow===v?" selected":""}>${l}</option>`).join("")}
   </select>
   <input class="mini" type="number" data-f="followDelay" min="0" max="3600" step="0.5" value="${cue.followDelay}" aria-label="Wait seconds">
-  <div class="dim ctr">&mdash;</div>
+  ${fade
+    ? `<div class="chk"><input type="checkbox" data-f="stopAfter"${cue.stopAfter?" checked":""}
+         title="Stop the target when the fade finishes. Off means it keeps running at the new level." aria-label="Stop after fade"></div>`
+    : `<div class="dim ctr">&mdash;</div>`}
   <div class="time">${summary}</div>
   <div class="rowbtns"><button data-act="play" title="Fire this cue now">&#9654;</button></div>
 </div>`;
@@ -1033,7 +1048,7 @@ function serialize(){
       follow:c.follow, followDelay:c.followDelay,
       loop:c.loop, duration:c.duration,
       start:c.start, end:c.end,
-      type:c.type || "audio", target:c.target || ""
+      type:c.type || "audio", target:c.target || "", stopAfter:!!c.stopAfter
     }))
   }, null, 2);
 }
@@ -1128,6 +1143,8 @@ async function openShowFile(file, handle){
     cue.end = +c.end || 0;
     cue.type = (c.type === "fade" || c.type === "stop") ? c.type : "audio";
     cue.target = c.target != null ? String(c.target) : "";
+    /* an older fade cue with no flag: -60 used to imply a stop, so keep that meaning */
+    cue.stopAfter = c.stopAfter != null ? !!c.stopAfter : (cue.type === "fade" && (+c.gainDb || 0) <= -60);
     if (cue.type !== "audio"){ cue.file = ""; cue.needsLevel = false; }
     return cue;
   });
@@ -1298,9 +1315,10 @@ function wfDraw(){
   if (!m){
     wrap.hidden = true; none.hidden = false;
     none.textContent = !cue ? "Select a cue to see its waveform."
-      : isFade(cue) ? "Fade cue — it ramps cue " + (cue.target === "*" ? "everything" : cue.target)
+      : isFade(cue) ? "Fade cue — ramps cue " + (cue.target === "*" ? "everything" : cue.target)
                       + " to " + (cue.gainDb <= -60 ? "silence" : cue.gainDb + " dB")
-                      + " over " + (+cue.fadeOut || 0) + "s. No audio of its own."
+                      + " over " + (+cue.fadeOut || 0) + "s, then "
+                      + (cue.stopAfter ? "stops it." : "leaves it running.") + " No audio of its own."
       : isStop(cue) ? "Stop cue — it cuts cue " + (cue.target === "*" ? "everything" : cue.target)
                       + " dead. No audio of its own."
       : (cue.file && !hasAudio(cue)) ? "This cue is missing its audio. Drop the folder in to relink it."
@@ -1573,6 +1591,7 @@ $("#nowlist").addEventListener("click", e => {
 rowsEl.addEventListener("input", e => {
   const f = e.target.dataset.f; if (!f) return;
   const cue = cueById(e.target.closest(".cue").dataset.id); if (!cue) return;
+  if (f === "stopAfter"){ cue.stopAfter = e.target.checked; markDirty(); render(); return; }
   if (f === "loop") cue.loop = e.target.checked;
   else if (f === "gainDb"){
     cue.gainDb = +e.target.value;
@@ -1581,7 +1600,8 @@ rowsEl.addEventListener("input", e => {
       if (lbl) lbl.textContent = cue.gainDb <= -60 ? "OUT" : cue.gainDb.toFixed(1) + " dB";
       const t = e.target.closest(".cue").querySelector(".time");
       if (t) t.innerHTML = `<b>${cue.gainDb <= -60 ? "OUT" : (cue.gainDb>0?"+":"") + cue.gainDb.toFixed(1) + " dB"}</b>`
-                         + (cue.fadeOut ? "over " + (+cue.fadeOut) + "s" : "snap");
+                         + (cue.fadeOut ? (+cue.fadeOut) + "s" : "snap")
+                         + (cue.stopAfter ? " &rarr; stop" : " &middot; runs on");
       markDirty(); return;
     }
     if (lbl){

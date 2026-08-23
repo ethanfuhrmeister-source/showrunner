@@ -156,11 +156,18 @@ to do by hand.
 **Fade cue** — ramps its target to a level over a time.
 
 - Pick the target where an audio cue shows its filename.
-- The fader sets the level it fades **to**. Drag it all the way down and it reads
-  **OUT** — that fades to silence and stops the target.
+- The fader sets the level it fades **to**. Drag it all the way down and it reads **OUT**.
 - The **Out** column is the fade time.
+- The **tick box** in the Loop column is *stop when done*. On, the target stops once
+  the fade finishes. Off, it keeps running at the new level.
 - Fade *up* too. Set it to −6 dB and a bed that was sitting at −20 comes up under a
-  scene, still running.
+  scene.
+
+The row tells you which it is: `OUT 10s → stop` versus `−6.0 dB 10s · runs on`.
+
+Turning *stop when done* off is what lets you duck a bed to silence and bring it back
+later — fade it out, leave it running, then fire another fade to bring it up. A cue
+you stopped is gone, and a second fade can't rescue it.
 
 **Stop cue** — cuts its target dead. No fade, no fade time.
 
