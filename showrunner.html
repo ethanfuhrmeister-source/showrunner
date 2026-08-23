@@ -437,7 +437,27 @@ async function ingest(files){
      folder must not quietly append itself to his cue list. */
   let relinkOnly = false;
   if (showFiles.length){
-    if (!await openShowFile(showFiles[0])) return;
+    /* Find the JSON that is actually a show. A folder can easily hold other
+       json -- notes, exports -- and grabbing whichever came first would fail
+       on a drop that contained a perfectly good show file. */
+    const shows = [];
+    for (const f of showFiles){
+      try{
+        const d = JSON.parse(await f.text());
+        if (d && Array.isArray(d.cues)) shows.push(f);
+      }catch(e){}
+    }
+    if (!shows.length){
+      banner("No ShowRunner show file in that drop. The .json in there isn't a cue list.", "err");
+      return;
+    }
+    if (shows.length > 1){
+      banner(shows.length + " different shows in that drop — " +
+             shows.map(f => baseName(f.name).replace(/\.show$/i,"")).join(", ") +
+             ". Drop just the one show's folder.", "err");
+      return;
+    }
+    if (!await openShowFile(shows[0])) return;
     if (!audioFiles.length) return;
     relinkOnly = true;
   }
