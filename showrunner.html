@@ -1060,7 +1060,10 @@ function serialize(){
       follow:c.follow, followDelay:c.followDelay,
       loop:c.loop, duration:c.duration,
       start:c.start, end:c.end,
-      type:c.type || "audio", target:c.target || "", stopAfter:!!c.stopAfter
+      /* only write what the cue actually uses, so a saved file compares cleanly */
+      type:c.type || "audio",
+      ...(c.type === "fade" || c.type === "stop" ? { target:c.target || "" } : {}),
+      ...(c.type === "fade" ? { stopAfter: !!c.stopAfter } : {})
     }))
   }, null, 2);
 }
